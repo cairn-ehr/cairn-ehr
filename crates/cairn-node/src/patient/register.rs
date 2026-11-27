@@ -58,7 +58,7 @@
 //! never wrote a `demographic.identifier.asserted` event. db/046 pass 1 reads
 //! `patient_identifier`, which only that event type writes (db/010), and `--identifier` on
 //! `patient-register` is the only place in the entire CLI an operator can enter an MRN. So a
-//! clerk who registered off an MRN card and later ran `patient-search --identifier MRN=…` —
+//! clerk who registered off an MRN card and later ran `patient-search --identifier mrn=…` —
 //! the precise, correct gesture db/045 blesses as "a complete and often better search" — got
 //! `no candidates found` and minted a duplicate carrying a signed attestation that reads as
 //! perfectly diligent. Worse, an identifier-only registration (no name, no dob — explicitly
@@ -320,8 +320,8 @@ pub fn build_dob_body(
 /// stray leading/trailing space … must not silently defeat it"). `SearchQuery::new` now trims
 /// `system`/`value` the same way, so the stored value and the value a later search compares
 /// against agree bit-for-bit. Before this fix, registering with a pasted
-/// `--identifier "MRN= 12345"` (trailing space intact) and later searching
-/// `--identifier MRN=12345` (no space) did not match — db/046 pass 1's exact compare saw two
+/// `--identifier "mrn= 12345"` (trailing space intact) and later searching
+/// `--identifier mrn=12345` (no space) did not match — db/046 pass 1's exact compare saw two
 /// different strings. Trimming is no longer merely how emptiness is decided; it is also what
 /// gets asserted.
 pub fn supplied_identifiers(identifiers: &[(String, String)]) -> Vec<(&str, &str)> {
@@ -723,12 +723,12 @@ mod tests {
     #[test]
     fn identifier_body_asserts_field_identifier_with_registrar_entered_provenance() {
         let pid = Uuid::from_u128(1);
-        let body = build_identifier_body(Uuid::from_u128(2), pid, "MRN", "12345", "kid", hlc(1));
+        let body = build_identifier_body(Uuid::from_u128(2), pid, "mrn", "12345", "kid", hlc(1));
         assert_eq!(body.event_type, "demographic.identifier.asserted");
         assert_eq!(body.schema_version, "demographic.identifier/1");
         assert_eq!(body.patient_id, pid.to_string());
         assert_eq!(body.payload["field"], "identifier");
-        assert_eq!(body.payload["system"], "MRN");
+        assert_eq!(body.payload["system"], "mrn");
         assert_eq!(body.payload["value"], "12345");
         // Literal, not the imported constant — see `name_body_asserts_…` above for why.
         assert_eq!(body.payload["provenance"], "registrar-entered");
@@ -738,7 +738,7 @@ mod tests {
             "the demographic floor HARD-requires a non-empty twin"
         );
         assert!(twin.contains("12345"), "{twin}");
-        assert!(twin.contains("MRN"), "{twin}");
+        assert!(twin.contains("mrn"), "{twin}");
     }
 
     #[test]
@@ -750,7 +750,7 @@ mod tests {
         let body = build_identifier_body(
             Uuid::from_u128(2),
             Uuid::from_u128(1),
-            "NHS",
+            "nhs-number-gb",
             "943 476 5919",
             "kid",
             hlc(1),
@@ -771,7 +771,7 @@ mod tests {
         let body = build_identifier_body(
             Uuid::from_u128(2),
             Uuid::from_u128(1),
-            "MRN",
+            "mrn",
             "1",
             "kid",
             hlc(1),
@@ -789,12 +789,12 @@ mod tests {
         // agreement — db/046 pass 1's exact compare would otherwise be defeated by a pasted
         // MRN's stray whitespace on one side but not the other.
         let input = vec![
-            ("MRN".to_string(), " 12345 ".to_string()),
-            ("NHI".to_string(), "ZZZ9999".to_string()),
+            ("mrn".to_string(), " 12345 ".to_string()),
+            ("nhi-nz".to_string(), "ZZZ9999".to_string()),
         ];
         assert_eq!(
             supplied_identifiers(&input),
-            vec![("MRN", "12345"), ("NHI", "ZZZ9999")],
+            vec![("mrn", "12345"), ("nhi-nz", "ZZZ9999")],
             "the value must be asserted TRIMMED — db/046 pass 1 compares it with `=`, and \
              the query side (SearchQuery::new) now trims too, so a mismatch here would make \
              the chart unfindable by the very query it was registered from"
@@ -805,14 +805,14 @@ mod tests {
     fn supplied_identifiers_drops_blank_pairs_rather_than_failing_the_registration() {
         let input = vec![
             ("".to_string(), "12345".to_string()),
-            ("MRN".to_string(), "".to_string()),
+            ("mrn".to_string(), "".to_string()),
             ("   ".to_string(), "12345".to_string()),
-            ("MRN".to_string(), "   ".to_string()),
-            ("MRN".to_string(), "real".to_string()),
+            ("mrn".to_string(), "   ".to_string()),
+            ("mrn".to_string(), "real".to_string()),
         ];
         assert_eq!(
             supplied_identifiers(&input),
-            vec![("MRN", "real")],
+            vec![("mrn", "real")],
             "a blank system or value is 'nothing supplied' (principle 4), not an identifier \
              — and the db/010 floor would refuse it, failing the whole registration"
         );
@@ -821,15 +821,15 @@ mod tests {
     #[test]
     fn supplied_identifiers_collapses_exact_duplicates_only() {
         let input = vec![
-            ("MRN".to_string(), "12345".to_string()),
-            ("MRN".to_string(), "12345".to_string()),
+            ("mrn".to_string(), "12345".to_string()),
+            ("mrn".to_string(), "12345".to_string()),
             // Same system, DIFFERENT value: two distinct claims, both must survive (§4.4
             // keeps both as the veto SIGNAL — see db/010's projection comment).
-            ("MRN".to_string(), "67890".to_string()),
+            ("mrn".to_string(), "67890".to_string()),
         ];
         assert_eq!(
             supplied_identifiers(&input),
-            vec![("MRN", "12345"), ("MRN", "67890")]
+            vec![("mrn", "12345"), ("mrn", "67890")]
         );
     }
 

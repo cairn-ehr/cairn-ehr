@@ -156,7 +156,7 @@ async fn the_identifier_pass_finds_a_chart_by_system_and_value() {
     submit_registration(&c, &sk, &kid, p, 0).await;
     let a = IdentifierAssertion {
         value: "12345",
-        system: "MRN",
+        system: "mrn",
         provenance: "document-verified",
         normalized: None,
         profile: None,
@@ -166,7 +166,7 @@ async fn the_identifier_pass_finds_a_chart_by_system_and_value() {
         .await
         .expect("identifier assertion accepted");
 
-    let identifiers = serde_json::json!([{"system": "MRN", "value": "12345"}]).to_string();
+    let identifiers = serde_json::json!([{"system": "mrn", "value": "12345"}]).to_string();
     let rows = search_candidates(&c, None, None, Some(&identifiers)).await;
     assert_eq!(
         rows,
@@ -336,7 +336,7 @@ async fn an_identifier_value_under_a_different_system_does_not_match() {
     submit_registration(&c, &sk, &kid, p, 0).await;
     let a = IdentifierAssertion {
         value: "12345",
-        system: "MRN",
+        system: "mrn",
         provenance: "document-verified",
         normalized: None,
         profile: None,
@@ -346,7 +346,7 @@ async fn an_identifier_value_under_a_different_system_does_not_match() {
         .await
         .expect("identifier assertion accepted");
 
-    let other_system = serde_json::json!([{"system": "Medicare", "value": "12345"}]).to_string();
+    let other_system = serde_json::json!([{"system": "medicare-au", "value": "12345"}]).to_string();
     let rows = search_candidates(&c, None, None, Some(&other_system)).await;
     assert!(
         rows.is_empty(),
@@ -442,7 +442,7 @@ async fn a_chart_matching_two_passes_returns_one_row_per_pass() {
     submit_registration(&c, &sk, &kid, p, 0).await;
     let a = IdentifierAssertion {
         value: "999",
-        system: "MRN",
+        system: "mrn",
         provenance: "document-verified",
         normalized: None,
         profile: None,
@@ -464,7 +464,7 @@ async fn a_chart_matching_two_passes_returns_one_row_per_pass() {
     .await
     .expect("dob assertion accepted");
 
-    let identifiers = serde_json::json!([{"system": "MRN", "value": "999"}]).to_string();
+    let identifiers = serde_json::json!([{"system": "mrn", "value": "999"}]).to_string();
     let rows = search_candidates(&c, None, Some(dob), Some(&identifiers)).await;
 
     // The two passes legitimately label their evidence differently — matched_pass is
@@ -512,7 +512,7 @@ async fn two_identifiers_matching_the_same_patient_are_deduped_to_one_row() {
     submit_registration(&c, &sk, &kid, p, 0).await;
     let mrn = IdentifierAssertion {
         value: "12345",
-        system: "MRN",
+        system: "mrn",
         provenance: "document-verified",
         normalized: None,
         profile: None,
@@ -520,7 +520,7 @@ async fn two_identifiers_matching_the_same_patient_are_deduped_to_one_row() {
     };
     let medicare = IdentifierAssertion {
         value: "67890",
-        system: "Medicare",
+        system: "medicare-au",
         provenance: "document-verified",
         normalized: None,
         profile: None,
@@ -535,8 +535,8 @@ async fn two_identifiers_matching_the_same_patient_are_deduped_to_one_row() {
 
     // Both identifiers typed by the clerk, so BOTH join rows match this one chart.
     let identifiers = serde_json::json!([
-        {"system": "MRN", "value": "12345"},
-        {"system": "Medicare", "value": "67890"},
+        {"system": "mrn", "value": "12345"},
+        {"system": "medicare-au", "value": "67890"},
     ])
     .to_string();
     let rows = search_candidates(&c, None, None, Some(&identifiers)).await;
@@ -915,7 +915,7 @@ async fn a_chart_with_no_readable_name_is_reported_incomplete_never_dropped() {
     submit_registration(&c, &sk, &kid, p, 0).await;
     let a = IdentifierAssertion {
         value: "999-no-name",
-        system: "MRN",
+        system: "mrn",
         provenance: "document-verified",
         normalized: None,
         profile: None,
@@ -925,7 +925,7 @@ async fn a_chart_with_no_readable_name_is_reported_incomplete_never_dropped() {
         .await
         .expect("identifier accepted");
 
-    let query = SearchQuery::new("", None, &[("MRN".to_string(), "999-no-name".to_string())]);
+    let query = SearchQuery::new("", None, &[("mrn".to_string(), "999-no-name".to_string())]);
     let list = cairn_node::patient::search::search_patients(&c, &query, "2026-06-16")
         .await
         .expect("search succeeds");
@@ -1065,10 +1065,10 @@ async fn an_identifier_with_a_materialised_key_is_found_by_its_printed_form() {
     submit_registration(&c, &sk, &kid, p, 0).await;
     let a = IdentifierAssertion {
         value: "943 476 5919",
-        system: "nhs-number",
+        system: "nhs-number-gb",
         provenance: "document-verified",
         normalized: Some("9434765919"),
-        profile: Some("nhs-number@b3-abc"),
+        profile: Some("nhs-number-gb@b3-abc"),
         use_: Some("national-id"),
     };
     submit_identifier(&c, &sk, &kid, p, 1, &a)
@@ -1080,7 +1080,7 @@ async fn an_identifier_with_a_materialised_key_is_found_by_its_printed_form() {
     let query = SearchQuery::new(
         "",
         None,
-        &[("nhs-number".to_string(), "943 476 5919".to_string())],
+        &[("nhs-number-gb".to_string(), "943 476 5919".to_string())],
     );
     let list = cairn_node::patient::search::search_patients(&c, &query, "2026-06-16")
         .await
@@ -1320,7 +1320,7 @@ async fn a_repudiated_only_name_reads_as_withheld_not_incomplete() {
     submit_registration(&c, &sk, &kid, p, 0).await;
     let ident = IdentifierAssertion {
         value: "with-repudiated-name",
-        system: "MRN",
+        system: "mrn",
         provenance: "document-verified",
         normalized: None,
         profile: None,
@@ -1376,7 +1376,7 @@ async fn a_repudiated_only_name_reads_as_withheld_not_incomplete() {
     let query = SearchQuery::new(
         "",
         None,
-        &[("MRN".to_string(), "with-repudiated-name".to_string())],
+        &[("mrn".to_string(), "with-repudiated-name".to_string())],
     );
     let list = cairn_node::patient::search::search_patients(&c, &query, "2026-06-16")
         .await
@@ -1428,7 +1428,7 @@ async fn a_repudiation_naming_no_asserted_name_still_counts_as_incomplete() {
     submit_registration(&c, &sk, &kid, p, 0).await;
     let ident = IdentifierAssertion {
         value: "no-name-ever-asserted",
-        system: "MRN",
+        system: "mrn",
         provenance: "document-verified",
         normalized: None,
         profile: None,
@@ -1472,7 +1472,7 @@ async fn a_repudiation_naming_no_asserted_name_still_counts_as_incomplete() {
     let query = SearchQuery::new(
         "",
         None,
-        &[("MRN".to_string(), "no-name-ever-asserted".to_string())],
+        &[("mrn".to_string(), "no-name-ever-asserted".to_string())],
     );
     let list = cairn_node::patient::search::search_patients(&c, &query, "2026-06-16")
         .await

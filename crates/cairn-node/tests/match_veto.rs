@@ -189,7 +189,7 @@ async fn no_veto_when_no_shared_system() {
         &kid,
         b,
         2,
-        &idassert("nhs-number", "2222", Some("2222")),
+        &idassert("nhs-number-gb", "2222", Some("2222")),
     )
     .await;
     assert!(

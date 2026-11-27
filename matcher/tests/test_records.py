@@ -15,7 +15,7 @@ def test_records_construct_and_are_frozen():
     rec = CandidateRecord(
         dob=dob,
         names=FieldValue(frozenset({name})),
-        identifiers={"au-medicare": frozenset({"2951"})},
+        identifiers={"medicare-au": frozenset({"2951"})},
     )
     assert rec.dob.value == DateValue(1980, 3, 15)
     assert rec.dob.provenance_rank == 60

@@ -465,8 +465,8 @@ async fn regression_identifier_and_legacy_untwinned_type_still_work() {
 
     // Slice-1 identifier assertion still projects through the (now re-declared) twin hook.
     let id_body = serde_json::json!({
-        "field":"identifier","value":"943 476 5919","system":"nhs-number",
-        "provenance":"document-verified","normalized":"9434765919","profile":"nhs-number@b3-abc"});
+        "field":"identifier","value":"943 476 5919","system":"nhs-number-gb",
+        "provenance":"document-verified","normalized":"9434765919","profile":"nhs-number-gb@b3-abc"});
     let body = EventBody {
         event_id: Uuid::now_v7().to_string(),
         patient_id: p.to_string(),
@@ -482,7 +482,7 @@ async fn regression_identifier_and_legacy_untwinned_type_still_work() {
         contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
         payload: id_body,
         attachments: vec![],
-        plaintext_twin: Some("nhs-number, document-verified: 943 476 5919".into()),
+        plaintext_twin: Some("nhs-number-gb, document-verified: 943 476 5919".into()),
         clock_grade: cairn_event::ClockGrade::SelfAsserted,
         safety: None,
     };
@@ -512,7 +512,7 @@ async fn regression_identifier_and_legacy_untwinned_type_still_work() {
         .unwrap()
         .get(0);
     assert_eq!(
-        id_twin, "nhs-number, document-verified: 943 476 5919",
+        id_twin, "nhs-number-gb, document-verified: 943 476 5919",
         "identifier authored twin carried by re-declared hook"
     );
 

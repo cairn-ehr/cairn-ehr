@@ -187,10 +187,10 @@ async fn twinless_demographic_is_still_hard_rejected() {
     // A structurally VALID identifier assertion, but with the authored twin DROPPED.
     let a = IdentifierAssertion {
         value: "943 476 5919",
-        system: "nhs-number",
+        system: "nhs-number-gb",
         provenance: "document-verified",
         normalized: Some("9434765919"),
-        profile: Some("nhs-number@b3-abc"),
+        profile: Some("nhs-number-gb@b3-abc"),
         use_: Some("national-id"),
     };
     let body = EventBody {
@@ -253,10 +253,10 @@ async fn whitespace_twin_demographic_is_still_hard_rejected() {
     // The floor must treat a blank twin as equivalent to an absent twin (ADR-0039).
     let a = IdentifierAssertion {
         value: "943 476 5920",
-        system: "nhs-number",
+        system: "nhs-number-gb",
         provenance: "document-verified",
         normalized: Some("9434765920"),
-        profile: Some("nhs-number@b3-abc"),
+        profile: Some("nhs-number-gb@b3-abc"),
         use_: Some("national-id"),
     };
     let body = EventBody {

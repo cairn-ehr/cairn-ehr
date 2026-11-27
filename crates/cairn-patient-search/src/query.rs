@@ -230,17 +230,17 @@ mod tests {
         let q = SearchQuery::new(
             "",
             None,
-            &[("  MRN  ".to_string(), "  12345  ".to_string())],
+            &[("  mrn  ".to_string(), "  12345  ".to_string())],
         );
         assert_eq!(
             q.identifiers,
-            vec![("MRN".to_string(), "12345".to_string())]
+            vec![("mrn".to_string(), "12345".to_string())]
         );
     }
 
     #[test]
     fn a_query_with_only_an_identifier_is_not_empty() {
-        let q = SearchQuery::new("", None, &[("MRN".into(), "12345".into())]);
+        let q = SearchQuery::new("", None, &[("mrn".into(), "12345".into())]);
         assert!(q.name_tokens.is_empty());
         assert!(!q.is_empty(), "an identifier alone is a real search");
     }

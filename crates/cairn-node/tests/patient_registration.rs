@@ -185,7 +185,7 @@ async fn standard_registration_with_a_well_formed_search_is_accepted() {
     let p = Uuid::now_v7();
     let displayed = [Uuid::now_v7(), Uuid::now_v7()];
     let tokens = vec!["smith".to_string(), "john".to_string()];
-    let identifiers: Vec<(String, String)> = vec![("MRN".into(), "12345".into())];
+    let identifiers: Vec<(String, String)> = vec![("mrn".into(), "12345".into())];
     let a = RegistrationAssertion {
         class: RegistrationClass::Standard,
         basis: None,
@@ -535,7 +535,7 @@ async fn an_empty_query_object_is_refused() {
     blank_terms["search"]["query"] = json!({
         "name_tokens": ["   "],
         "birth_date": "",
-        "identifiers": [{"system": "MRN", "value": ""}]
+        "identifiers": [{"system": "mrn", "value": ""}]
     });
     let p2 = Uuid::now_v7();
     let r2 = submit_registration(&c, &sk, &kid, p2, 1, blank_terms, good_twin()).await;

@@ -241,6 +241,7 @@ nav:
       - ADR-0110 · The pinned terminal gateway: spec/decisions/0110-the-pinned-terminal-gateway.md
       - ADR-0111 · An older window works above a floor: spec/decisions/0111-an-older-window-works-above-a-floor.md
       - ADR-0112 · A terminal follows its node: spec/decisions/0112-a-terminal-follows-its-node.md
+      - ADR-0113 · How an identifier's system is spelled: spec/decisions/0113-identifier-system-spelling.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

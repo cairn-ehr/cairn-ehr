@@ -381,7 +381,7 @@ mod tests {
         // become an empty-string name. An identifier-only registration is legitimate.
         let data = MockData::with_fixtures();
         let mut store = TokenStore::new();
-        let query = SearchQuery::new("", None, &[("MRN".into(), "77777".into())]);
+        let query = SearchQuery::new("", None, &[("mrn".into(), "77777".into())]);
         let displayed = data.search(&query, TODAY).await.unwrap();
         let token = store.record(query, bound_for_prompt(&displayed)).unwrap();
         let attested = store.take(token).unwrap();
@@ -390,7 +390,7 @@ mod tests {
         store.commit();
         let found = data
             .search(
-                &SearchQuery::new("", None, &[("MRN".into(), "77777".into())]),
+                &SearchQuery::new("", None, &[("mrn".into(), "77777".into())]),
                 TODAY,
             )
             .await
@@ -450,7 +450,7 @@ mod tests {
         let data = MockData::with_fixtures();
         let right_system = data
             .search(
-                &SearchQuery::new("", None, &[("MRN".into(), "12345".into())]),
+                &SearchQuery::new("", None, &[("mrn".into(), "12345".into())]),
                 TODAY,
             )
             .await
@@ -459,7 +459,7 @@ mod tests {
 
         let wrong_system = data
             .search(
-                &SearchQuery::new("", None, &[("National".into(), "12345".into())]),
+                &SearchQuery::new("", None, &[("national-id".into(), "12345".into())]),
                 TODAY,
             )
             .await
@@ -520,7 +520,7 @@ mod tests {
         let data = MockData::with_fixtures();
         let mut store = TokenStore::new();
         let typed = "Ruslan Bakhtiyarov";
-        let query = SearchQuery::new(typed, None, &[("MRN".into(), "55555".into())]);
+        let query = SearchQuery::new(typed, None, &[("mrn".into(), "55555".into())]);
         let displayed = data.search(&query, TODAY).await.unwrap();
         let token = store.record(query, bound_for_prompt(&displayed)).unwrap();
         let id = data
@@ -573,7 +573,7 @@ mod tests {
         // identifiers, and NOTHING else, so there is no field to narrow on and no argument
         // through which one could be smuggled. The display/rank half of decision 4 needs an
         // additive `Candidate.sex` and is deferred to #645.
-        let q = SearchQuery::new("Wu Mei", Some("2001-07-14"), &[("MRN".into(), "1".into())]);
+        let q = SearchQuery::new("Wu Mei", Some("2001-07-14"), &[("mrn".into(), "1".into())]);
         let json = serde_json::to_value(&q).unwrap();
         // `serde_json::Value` keys an object by a sorted map, so this list is alphabetical
         // rather than in declaration order. The SET is what the claim is about.

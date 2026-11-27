@@ -394,7 +394,7 @@ async fn two_servers_register_once() {
 #[tokio::test]
 async fn a_request_claiming_a_complete_search_the_node_finds_incomplete_is_refused() {
     let Some(mut r) = rig().await else { return };
-    let mrn = [("MRN".to_string(), "A1".to_string())];
+    let mrn = [("mrn".to_string(), "A1".to_string())];
     let nameless = register_patient_returning_event(
         &mut r.owner,
         &r.sk,

@@ -94,7 +94,7 @@ pub fn starting_population() -> Vec<FixturePatient> {
             "Amina أمينة अमीना 阿明娜",
             "female",
             "1984-03-02",
-            &[("MRN", "12345"), ("National", "QLD-998877")],
+            &[("mrn", "12345"), ("medicare-au", "2123456701")],
             TrustState::Confirmed,
         ),
         patient(
@@ -102,7 +102,7 @@ pub fn starting_population() -> Vec<FixturePatient> {
             "Michaelowski, Samantha",
             "female",
             "1979-11-20",
-            &[("MRN", "20011")],
+            &[("mrn", "20011")],
             TrustState::Confirmed,
         ),
         patient(
@@ -110,7 +110,7 @@ pub fn starting_population() -> Vec<FixturePatient> {
             "Fyodorowksi-Eschenbacher, Katarzyna",
             "female",
             "1962-04-09",
-            &[("MRN", "20012")],
+            &[("mrn", "20012")],
             TrustState::Confirmed,
         ),
         patient(
@@ -118,7 +118,7 @@ pub fn starting_population() -> Vec<FixturePatient> {
             "O'Brien-Smith, John",
             "male",
             "1990-01-31",
-            &[("MRN", "20013")],
+            &[("mrn", "20013")],
             TrustState::Confirmed,
         ),
         patient(
@@ -128,7 +128,7 @@ pub fn starting_population() -> Vec<FixturePatient> {
             "Wu, Mei",
             "female",
             "2001-07-14",
-            &[("MRN", "20014")],
+            &[("mrn", "20014")],
             TrustState::Confirmed,
         ),
         patient(

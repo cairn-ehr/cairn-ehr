@@ -83,10 +83,10 @@ async fn happy_path_appends_and_projects_with_authored_twin() {
     common::submit_registration(&c, &sk, &kid, p, 0).await;
     let a = IdentifierAssertion {
         value: "943 476 5919",
-        system: "nhs-number",
+        system: "nhs-number-gb",
         provenance: "document-verified",
         normalized: Some("9434765919"),
-        profile: Some("nhs-number@b3-abc"),
+        profile: Some("nhs-number-gb@b3-abc"),
         use_: Some("national-id"),
     };
     assert_identifier(&c, &sk, &kid, p, 1, &a)
@@ -124,7 +124,7 @@ async fn happy_path_appends_and_projects_with_authored_twin() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(twin, "nhs-number, document-verified: 943 476 5919");
+    assert_eq!(twin, "nhs-number-gb, document-verified: 943 476 5919");
 }
 
 #[tokio::test]
@@ -141,10 +141,10 @@ async fn set_union_dedups_same_key_keeps_different_key() {
     common::submit_registration(&c, &sk, &kid, p, 0).await;
     let same = IdentifierAssertion {
         value: "943 476 5919",
-        system: "nhs-number",
+        system: "nhs-number-gb",
         provenance: "patient-stated",
         normalized: Some("9434765919"),
-        profile: Some("nhs-number@b3-abc"),
+        profile: Some("nhs-number-gb@b3-abc"),
         use_: None,
     };
     let same_formatted = IdentifierAssertion {
@@ -153,10 +153,10 @@ async fn set_union_dedups_same_key_keeps_different_key() {
     };
     let other = IdentifierAssertion {
         value: "111 222 3334",
-        system: "nhs-number",
+        system: "nhs-number-gb",
         provenance: "patient-stated",
         normalized: Some("1112223334"),
-        profile: Some("nhs-number@b3-abc"),
+        profile: Some("nhs-number-gb@b3-abc"),
         use_: None,
     };
     assert_identifier(&c, &sk, &kid, p, 1, &same).await.unwrap();
@@ -168,7 +168,7 @@ async fn set_union_dedups_same_key_keeps_different_key() {
         .unwrap(); // different normalized → 2nd row
     let p_str = p.to_string();
     let n: i64 = c.query_one(
-        "SELECT count(*) FROM patient_identifier WHERE patient_id::text=$1 AND system='nhs-number'",
+        "SELECT count(*) FROM patient_identifier WHERE patient_id::text=$1 AND system='nhs-number-gb'",
         &[&p_str]).await.unwrap().get(0);
     assert_eq!(
         n, 2,
@@ -313,7 +313,7 @@ async fn floor_rejects_each_invariant_violation() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c).await;
     // A valid authored twin used for cases where only the payload is malformed.
-    let good_twin = Some("nhs-number, document-verified: x");
+    let good_twin = Some("nhs-number-gb, document-verified: x");
 
     // value empty — §4.4 mandatory, non-empty string
     assert_rejected_and_empty(
@@ -321,7 +321,7 @@ async fn floor_rejects_each_invariant_violation() {
         &sk,
         &kid,
         Uuid::now_v7(),
-        serde_json::json!({"field":"identifier","value":"","system":"nhs-number","provenance":"x"}),
+        serde_json::json!({"field":"identifier","value":"","system":"nhs-number-gb","provenance":"x"}),
         good_twin,
         "value-empty",
     )
@@ -343,7 +343,7 @@ async fn floor_rejects_each_invariant_violation() {
         &sk,
         &kid,
         Uuid::now_v7(),
-        serde_json::json!({"field":"identifier","value":"v","system":"nhs-number"}),
+        serde_json::json!({"field":"identifier","value":"v","system":"nhs-number-gb"}),
         good_twin,
         "provenance-missing",
     )
@@ -455,10 +455,10 @@ async fn identifier_same_key_winner_is_hlc_latest_regardless_of_apply_order() {
     // Same normalized "9434765919" (same match_key), different displayed value.
     let earlier = IdentifierAssertion {
         value: "943 476 5919",
-        system: "nhs-number",
+        system: "nhs-number-gb",
         provenance: "patient-stated",
         normalized: Some("9434765919"),
-        profile: Some("nhs-number@b3-abc"),
+        profile: Some("nhs-number-gb@b3-abc"),
         use_: None,
     };
     let later = IdentifierAssertion {
@@ -494,7 +494,7 @@ async fn identifier_same_key_winner_is_hlc_latest_regardless_of_apply_order() {
             let row = c
                 .query_one(
                     "SELECT count(*) OVER (), value FROM patient_identifier \
-                 WHERE patient_id::text=$1 AND system='nhs-number' LIMIT 1",
+                 WHERE patient_id::text=$1 AND system='nhs-number-gb' LIMIT 1",
                     &[&p_str],
                 )
                 .await

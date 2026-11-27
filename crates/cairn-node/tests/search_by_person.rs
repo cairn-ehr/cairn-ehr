@@ -228,7 +228,7 @@ async fn a_matched_chart_not_held_here_with_no_name_is_not_a_partial_search() {
     let far = Uuid::now_v7();
     let a = IdentifierAssertion {
         value: "98765",
-        system: "MRN",
+        system: "mrn",
         provenance: "document-verified",
         normalized: None,
         profile: None,
@@ -248,7 +248,7 @@ async fn a_matched_chart_not_held_here_with_no_name_is_not_a_partial_search() {
     );
     common::apply_remote_raw(&c, &sk, event).await.unwrap();
 
-    let query = SearchQuery::new("", None, &[("MRN".to_string(), "98765".to_string())]);
+    let query = SearchQuery::new("", None, &[("mrn".to_string(), "98765".to_string())]);
     let list = search_patients(&c, &query, "2026-10-03").await.unwrap();
     assert_eq!(rows(&list), vec![vec![far]]);
     let m = &list.people[0].members()[0];

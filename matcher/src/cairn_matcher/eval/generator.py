@@ -339,7 +339,7 @@ _MONONYMS = ("Suharto", "Sukarno", "Madonna", "Ronaldinho", "Teresa")
 _GIVEN = ("Alex", "Sam", "Mira", "Jon", "Ana", "Wei", "Omar", "Fatima", "Ivan", "Lena")
 _FAMILY = ("Nguyen", "Einarsson", "Garcia", "Okafor", "Kowalski", "Haddad", "Silva", "Ali")
 _PATRONYMIC = (("Jón", "Einarsson"), ("Ólafur", "Bjarnason"), ("Freyr", "Þórsson"))
-_ID_SYSTEMS = ("au-medicare", "national-id", "kennitala", "mrn-local")
+_ID_SYSTEMS = ("medicare-au", "national-id", "kennitala-is", "mrn-local")
 # Shared by synth_seed's sex_at_birth draw AND corrupt_dob_estimate's observed-sex
 # fallback: widening the seed pool (e.g. an intersex/unknown value, principle 4) must
 # widen the clones' distribution with it, never leave the fallback drawing a stale pair.

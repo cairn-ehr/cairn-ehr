@@ -58,8 +58,8 @@ def test_shares_key_via_name_token():
 
 
 def test_shares_key_via_identifier_but_not_unknown():
-    a = {"identifiers": [{"system": "au-medicare", "match_key": "111"}]}
-    b = {"identifiers": [{"system": "au-medicare", "match_key": "111"}]}
+    a = {"identifiers": [{"system": "medicare-au", "match_key": "111"}]}
+    b = {"identifiers": [{"system": "medicare-au", "match_key": "111"}]}
     assert shares_blocking_key(a, b) is True
     a_unk = {"identifiers": [{"system": "unknown", "match_key": "111"}]}
     b_unk = {"identifiers": [{"system": "unknown", "match_key": "111"}]}
@@ -68,9 +68,9 @@ def test_shares_key_via_identifier_but_not_unknown():
 
 def test_no_shared_key_is_false():
     a = {"dob": {"value": "1990-05-12"}, "names": [{"value": "Alex Nguyen"}],
-         "identifiers": [{"system": "au-medicare", "match_key": "111"}]}
+         "identifiers": [{"system": "medicare-au", "match_key": "111"}]}
     b = {"dob": {"value": "12/05/1990"}, "names": [{"value": "Sam Smith"}],
-         "identifiers": [{"system": "au-medicare", "match_key": "222"}]}
+         "identifiers": [{"system": "medicare-au", "match_key": "222"}]}
     assert shares_blocking_key(a, b) is False
 
 
@@ -79,7 +79,7 @@ def _seed_rec():
         "record_id": "e0-seed",
         "dob": {"value": "1990-05-12", "precision": "day", "provenance_rank": 40},
         "names": [{"value": "Alex Nguyen", "provenance_rank": 30}],
-        "identifiers": [{"system": "au-medicare", "match_key": "12345", "value": "12345"}],
+        "identifiers": [{"system": "medicare-au", "match_key": "12345", "value": "12345"}],
     }
 
 
