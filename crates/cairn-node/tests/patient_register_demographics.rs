@@ -413,7 +413,7 @@ async fn an_identifier_only_registration_asserts_an_identifier_and_no_name_or_do
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
-    let identifiers = [("MRN".to_string(), "identifier-only-999".to_string())];
+    let identifiers = [("mrn".to_string(), "identifier-only-999".to_string())];
     let query = SearchQuery::new("", None, &identifiers);
 
     let pid = register_patient(&mut c, &sk, &kid, "n", None, &query, &no_candidates())
@@ -432,7 +432,7 @@ async fn an_identifier_only_registration_asserts_an_identifier_and_no_name_or_do
     assert_eq!(
         patient_identifiers(&c, pid).await,
         vec![(
-            "MRN".to_string(),
+            "mrn".to_string(),
             "identifier-only-999".to_string(),
             "identifier-only-999".to_string(),
             "registrar-entered".to_string(),
@@ -488,7 +488,7 @@ async fn a_registered_patient_is_findable_by_a_later_search_on_the_identifier_al
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
     let name = "Mrn Card Patient";
-    let identifiers = [("MRN".to_string(), "12345".to_string())];
+    let identifiers = [("mrn".to_string(), "12345".to_string())];
     let query = SearchQuery::new(name, Some("1980-01-01"), &identifiers);
 
     let pid = register_patient(&mut c, &sk, &kid, "n", Some(name), &query, &no_candidates())
@@ -513,8 +513,8 @@ async fn a_registered_patient_is_findable_by_a_later_search_on_the_identifier_al
 async fn a_padded_identifier_at_registration_is_found_by_the_unpadded_search() {
     // The N3 cross-gesture case (ADR-0061, final review, maintainer decision: trim BOTH
     // sides). A clerk pastes an MRN straight off a scanned card, whitespace and all —
-    // `patient-register --identifier "MRN= 55512"` — and weeks later a different clerk types
-    // the same MRN clean, no padding — `patient-search --identifier MRN=55512`. Before this
+    // `patient-register --identifier "mrn= 55512"` — and weeks later a different clerk types
+    // the same MRN clean, no padding — `patient-search --identifier mrn=55512`. Before this
     // fix `SearchQuery::new` and `supplied_identifiers` left the value exactly as typed, so
     // the stored value carried the paste's whitespace while the query never did, and db/046
     // pass 1's exact `=` compare silently missed the very chart the funnel had just created
@@ -529,7 +529,7 @@ async fn a_padded_identifier_at_registration_is_found_by_the_unpadded_search() {
 
     let name = "Padded Mrn Patient";
     // Registered from a pasted card: leading/trailing whitespace on both system and value.
-    let padded_identifiers = [("  MRN  ".to_string(), "  55512  ".to_string())];
+    let padded_identifiers = [("  mrn  ".to_string(), "  55512  ".to_string())];
     let query = SearchQuery::new(name, None, &padded_identifiers);
 
     let pid = register_patient(&mut c, &sk, &kid, "n", Some(name), &query, &no_candidates())
@@ -542,7 +542,7 @@ async fn a_padded_identifier_at_registration_is_found_by_the_unpadded_search() {
     assert_eq!(
         stored,
         vec![(
-            "MRN".to_string(),
+            "mrn".to_string(),
             "55512".to_string(),
             "55512".to_string(),
             "registrar-entered".to_string(),
@@ -552,7 +552,7 @@ async fn a_padded_identifier_at_registration_is_found_by_the_unpadded_search() {
     );
 
     // A different clerk, weeks later, types the same MRN clean — no padding on either side.
-    let clean_identifiers = [("MRN".to_string(), "55512".to_string())];
+    let clean_identifiers = [("mrn".to_string(), "55512".to_string())];
     let by_identifier = SearchQuery::new("", None, &clean_identifiers);
     let list = search_patients(&c, &by_identifier, "2026-08-05")
         .await
@@ -580,8 +580,8 @@ async fn every_supplied_identifier_lands_and_each_one_finds_the_chart() {
 
     let name = "Two Card Patient";
     let identifiers = [
-        ("MRN".to_string(), "MC-001".to_string()),
-        ("NHI".to_string(), "ZZZ9999".to_string()),
+        ("mrn".to_string(), "MC-001".to_string()),
+        ("nhi-nz".to_string(), "ZZZ9999".to_string()),
     ];
     let query = SearchQuery::new(name, None, &identifiers);
 
@@ -595,9 +595,9 @@ async fn every_supplied_identifier_lands_and_each_one_finds_the_chart() {
         2,
         "both supplied identifiers must land, not just the first: {stored:?}"
     );
-    assert_eq!(stored[0].0, "MRN");
+    assert_eq!(stored[0].0, "mrn");
     assert_eq!(stored[0].1, "MC-001");
-    assert_eq!(stored[1].0, "NHI");
+    assert_eq!(stored[1].0, "nhi-nz");
     assert_eq!(stored[1].1, "ZZZ9999");
 
     // Each, on its own, finds the chart.
@@ -668,7 +668,7 @@ async fn an_identifier_is_asserted_with_no_normalized_form_and_no_profile() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
-    let identifiers = [("MRN".to_string(), "943 476 5919".to_string())];
+    let identifiers = [("mrn".to_string(), "943 476 5919".to_string())];
     let query = SearchQuery::new("", None, &identifiers);
     let pid = register_patient(&mut c, &sk, &kid, "n", None, &query, &no_candidates())
         .await
@@ -721,7 +721,7 @@ async fn a_blank_empty_string_name_the_live_cli_shape_asserts_no_name_event() {
     let query = SearchQuery::new(
         "",
         None,
-        &[("MRN".to_string(), "cli-blank-name-999".to_string())],
+        &[("mrn".to_string(), "cli-blank-name-999".to_string())],
     );
     let pid = register_patient(&mut c, &sk, &kid, "n", Some(""), &query, &no_candidates())
         .await
@@ -748,7 +748,7 @@ async fn a_whitespace_only_name_asserts_no_name_event() {
     let query = SearchQuery::new(
         "",
         None,
-        &[("MRN".to_string(), "cli-whitespace-name-999".to_string())],
+        &[("mrn".to_string(), "cli-whitespace-name-999".to_string())],
     );
     let pid = register_patient(
         &mut c,

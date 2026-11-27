@@ -126,7 +126,7 @@ async fn every_fact_of_a_chart_is_read_with_its_provenance() {
     .await;
     let id = IdentifierAssertion {
         value: "1234 56789 0",
-        system: "au-medicare",
+        system: "medicare-au",
         provenance: "document-verified",
         normalized: None,
         profile: None,
@@ -196,7 +196,7 @@ async fn every_fact_of_a_chart_is_read_with_its_provenance() {
             ident.value.as_str(),
             ident.provenance.as_str()
         ),
-        ("au-medicare", "1234 56789 0", "document-verified")
+        ("medicare-au", "1234 56789 0", "document-verified")
     );
     assert_eq!(f.addresses.len(), 1);
     let addr = &f.addresses[0];

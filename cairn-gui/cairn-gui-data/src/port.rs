@@ -21,7 +21,7 @@ pub struct Demographics {
     pub patient: PatientRef,
     pub sex: String,
     pub birth_date: String,
-    /// (system, value), e.g. ("MRN", "12345").
+    /// (system, value), e.g. ("mrn", "12345").
     pub identifiers: Vec<(String, String)>,
 }
 

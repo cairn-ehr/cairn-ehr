@@ -49,7 +49,7 @@ def test_record_to_candidate_matches_a_directly_built_record():
             "dob": {"value": "1990-05-12", "precision": "day", "provenance_rank": 70},
             "sex_at_birth": {"value": "female", "provenance_rank": 70},
             "names": [{"value": "Alex Nguyen", "provenance_rank": 30}],
-            "identifiers": [{"system": "au-medicare", "match_key": "12345", "value": "12345"}],
+            "identifiers": [{"system": "medicare-au", "match_key": "12345", "value": "12345"}],
         }]}],
     }).entities[0].records[0]
 
@@ -58,7 +58,7 @@ def test_record_to_candidate_matches_a_directly_built_record():
         dob_row={"value": "1990-05-12", "facets": {"precision": "day"}, "provenance_rank": 70},
         sex_row={"value": "female", "provenance_rank": 70},
         name_rows=[{"value": "Alex Nguyen", "provenance_rank": 30}],
-        identifier_rows=[{"system": "au-medicare", "match_key": "12345"}],
+        identifier_rows=[{"system": "medicare-au", "match_key": "12345"}],
     )
     assert got == expected
 

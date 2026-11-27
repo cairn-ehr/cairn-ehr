@@ -10,13 +10,13 @@
           "dob": {"value": "1990-05-12", "precision": "day", "provenance_rank": 70},
           "sex_at_birth": {"value": "female", "provenance_rank": 70},
           "names": [{"value": "Alex Nguyen", "provenance_rank": 30}],
-          "identifiers": [{"system": "au-medicare", "match_key": "12345", "value": "12345"}]
+          "identifiers": [{"system": "medicare-au", "match_key": "12345", "value": "12345"}]
         },
         {
           "record_id": "alex-2",
           "dob": {"value": "1990-05-12", "precision": "day", "provenance_rank": 70},
           "names": [{"value": "Nguyen Van Alex", "provenance_rank": 20}],
-          "identifiers": [{"system": "au-medicare", "match_key": "12345", "value": "12345"}]
+          "identifiers": [{"system": "medicare-au", "match_key": "12345", "value": "12345"}]
         }
       ]
     },
@@ -44,13 +44,13 @@
           "record_id": "pat-1",
           "dob": {"value": "1978-03-03", "precision": "day", "provenance_rank": 40},
           "names": [{"value": "Jon Einarsson", "provenance_rank": 30}],
-          "identifiers": [{"system": "kennitala", "match_key": "070378", "value": "070378"}]
+          "identifiers": [{"system": "kennitala-is", "match_key": "070378", "value": "070378"}]
         },
         {
           "record_id": "pat-2",
           "dob": {"value": "1978-03-03", "precision": "day", "provenance_rank": 20},
           "names": [{"value": "Jón Einarsson", "provenance_rank": 20}],
-          "identifiers": [{"system": "kennitala", "match_key": "070378", "value": "070378"}]
+          "identifiers": [{"system": "kennitala-is", "match_key": "070378", "value": "070378"}]
         }
       ]
     },
@@ -62,7 +62,7 @@
           "dob": {"value": "2001-11-30", "precision": "day", "provenance_rank": 70},
           "sex_at_birth": {"value": "female", "provenance_rank": 70},
           "names": [{"value": "Maria Garcia", "provenance_rank": 30}],
-          "identifiers": [{"system": "au-medicare", "match_key": "99999", "value": "99999"}]
+          "identifiers": [{"system": "medicare-au", "match_key": "99999", "value": "99999"}]
         }
       ]
     },

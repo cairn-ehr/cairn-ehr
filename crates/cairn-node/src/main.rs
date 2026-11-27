@@ -1959,7 +1959,7 @@ enum Cmd {
         /// ISO YYYY-MM-DD (or YYYY / YYYY-MM — an exact match on the value as stored).
         #[arg(long)]
         birth_date: Option<String>,
-        /// Repeatable `system=value`, e.g. --identifier MRN=12345
+        /// Repeatable `system=value`, e.g. --identifier mrn=12345
         #[arg(long = "identifier")]
         identifiers: Vec<String>,
     },
@@ -1978,7 +1978,7 @@ enum Cmd {
         /// precision follows the shape you type and is never rounded up.
         #[arg(long)]
         birth_date: Option<String>,
-        /// Repeatable `system=value`, e.g. --identifier MRN=12345. Searched AND recorded
+        /// Repeatable `system=value`, e.g. --identifier mrn=12345. Searched AND recorded
         /// on the new chart, so the chart is findable by this identifier afterwards.
         #[arg(long = "identifier")]
         identifiers: Vec<String>,
@@ -6415,7 +6415,7 @@ async fn run() -> anyhow::Result<()> {
 /// `value` is special.
 ///
 /// **The blank check is `trim().is_empty()`, matching the persistence side (final review,
-/// N2/N3).** It used to be a bare `.is_empty()`, which let `--identifier "MRN=   "` (a
+/// N2/N3).** It used to be a bare `.is_empty()`, which let `--identifier "mrn=   "` (a
 /// whitespace-only value) past the CLI, into a `SearchQuery` that gets SIGNED into the
 /// permanent attestation — and then silently dropped by
 /// `cairn_node::patient::register::supplied_identifiers`'s own `trim().is_empty()` filter,
@@ -6428,13 +6428,13 @@ fn parse_identifier_pairs(raw: &[String]) -> anyhow::Result<Vec<(String, String)
             let (system, value) = s.split_once('=').ok_or_else(|| {
                 anyhow::anyhow!(
                     "malformed --identifier {s:?}: expected `system=value`, e.g. \
-                     --identifier MRN=12345"
+                     --identifier mrn=12345"
                 )
             })?;
             if system.trim().is_empty() || value.trim().is_empty() {
                 anyhow::bail!(
                     "malformed --identifier {s:?}: both `system` and `value` must be \
-                     non-empty (expected `system=value`, e.g. --identifier MRN=12345)"
+                     non-empty (expected `system=value`, e.g. --identifier mrn=12345)"
                 );
             }
             Ok((system.to_string(), value.to_string()))
@@ -6828,19 +6828,19 @@ mod tests {
 
     #[test]
     fn a_well_formed_identifier_pair_parses() {
-        let out = parse_identifier_pairs(&["MRN=12345".to_string()]).unwrap();
-        assert_eq!(out, vec![("MRN".to_string(), "12345".to_string())]);
+        let out = parse_identifier_pairs(&["mrn=12345".to_string()]).unwrap();
+        assert_eq!(out, vec![("mrn".to_string(), "12345".to_string())]);
     }
 
     #[test]
     fn several_identifier_pairs_parse_in_order() {
-        let raw = vec!["MRN=12345".to_string(), "NHI=ABC1234".to_string()];
+        let raw = vec!["mrn=12345".to_string(), "nhi-nz=ABC1234".to_string()];
         let out = parse_identifier_pairs(&raw).unwrap();
         assert_eq!(
             out,
             vec![
-                ("MRN".to_string(), "12345".to_string()),
-                ("NHI".to_string(), "ABC1234".to_string()),
+                ("mrn".to_string(), "12345".to_string()),
+                ("nhi-nz".to_string(), "ABC1234".to_string()),
             ]
         );
     }
@@ -6874,18 +6874,18 @@ mod tests {
 
     #[test]
     fn an_empty_value_is_rejected() {
-        let err = parse_identifier_pairs(&["MRN=".to_string()]).unwrap_err();
+        let err = parse_identifier_pairs(&["mrn=".to_string()]).unwrap_err();
         assert!(err.to_string().contains("system=value"));
     }
 
     #[test]
     fn a_whitespace_only_value_is_rejected_at_the_cli_edge() {
-        // The N2 regression: a bare `.is_empty()` check let `--identifier "MRN=   "` (no
+        // The N2 regression: a bare `.is_empty()` check let `--identifier "mrn=   "` (no
         // real value, only spaces) past the CLI and into a `SearchQuery` that gets SIGNED
         // into the permanent attestation, only to be silently dropped later by
         // `supplied_identifiers`'s own `trim().is_empty()` filter — attested but never
         // persisted. Refusing here, loudly, before anything is signed, is the fix.
-        let err = parse_identifier_pairs(&["MRN=   ".to_string()]).unwrap_err();
+        let err = parse_identifier_pairs(&["mrn=   ".to_string()]).unwrap_err();
         assert!(err.to_string().contains("system=value"));
     }
 
@@ -6899,7 +6899,7 @@ mod tests {
     fn one_malformed_pair_among_valid_ones_fails_the_whole_parse() {
         // Strict, not best-effort: a single bad pair must not let the OTHER, well-formed
         // pairs quietly proceed while it is dropped — the whole command refuses instead.
-        let raw = vec!["MRN=12345".to_string(), "bad-pair".to_string()];
+        let raw = vec!["mrn=12345".to_string(), "bad-pair".to_string()];
         assert!(parse_identifier_pairs(&raw).is_err());
     }
 

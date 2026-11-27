@@ -17,7 +17,7 @@ def _rec():
         dob=FieldValue(DateValue(1980, 3, 15), provenance_rank=60),
         sex_at_birth=FieldValue("female", provenance_rank=60),
         names=FieldValue(frozenset({n(["alex"], ["kim"])}), provenance_rank=20),
-        identifiers={"au-medicare": frozenset({"2951"})},
+        identifiers={"medicare-au": frozenset({"2951"})},
     )
 
 

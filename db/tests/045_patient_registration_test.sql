@@ -205,7 +205,7 @@ BEGIN
                                 'name_tokens', jsonb_build_array('   '),
                                 'birth_date', '',
                                 'identifiers', jsonb_build_array(
-                                    jsonb_build_object('system', 'MRN', 'value', ''))))
+                                    jsonb_build_object('system', 'mrn', 'value', ''))))
     LOOP
         BEGIN
             PERFORM cairn_check_registration_assertion('identity.registration.asserted',

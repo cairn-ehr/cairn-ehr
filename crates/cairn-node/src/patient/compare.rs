@@ -360,11 +360,11 @@ mod tests {
     #[test]
     fn findings_that_tie_on_the_pair_are_ordered_by_subject() {
         let mut medicare = finding("hard_veto", 1, 2, "identifier");
-        medicare.subject = "medicare".into();
+        medicare.subject = "medicare-au".into();
         let mut dva = finding("hard_veto", 1, 2, "identifier");
-        dva.subject = "dva".into();
+        dva.subject = "dva-au".into();
         let ordered = order_findings(vec![medicare, dva]);
         let got: Vec<&str> = ordered.iter().map(|f| f.subject.as_str()).collect();
-        assert_eq!(got, vec!["dva", "medicare"]);
+        assert_eq!(got, vec!["dva-au", "medicare-au"]);
     }
 }

@@ -235,10 +235,10 @@ mod tests {
     fn sample() -> IdentifierAssertion<'static> {
         IdentifierAssertion {
             value: "943 476 5919",
-            system: "nhs-number",
+            system: "nhs-number-gb",
             provenance: "document-verified",
             normalized: Some("9434765919"),
-            profile: Some("nhs-number@b3-abc"),
+            profile: Some("nhs-number-gb@b3-abc"),
             use_: Some("national-id"),
         }
     }
@@ -248,10 +248,10 @@ mod tests {
         let v = identifier_assertion_body(&sample());
         assert_eq!(v["field"], "identifier");
         assert_eq!(v["value"], "943 476 5919");
-        assert_eq!(v["system"], "nhs-number");
+        assert_eq!(v["system"], "nhs-number-gb");
         assert_eq!(v["provenance"], "document-verified");
         assert_eq!(v["normalized"], "9434765919");
-        assert_eq!(v["profile"], "nhs-number@b3-abc");
+        assert_eq!(v["profile"], "nhs-number-gb@b3-abc");
         assert_eq!(v["use"], "national-id");
     }
 
@@ -279,7 +279,7 @@ mod tests {
     fn twin_renders_profile_independent_plaintext() {
         assert_eq!(
             render_identifier_twin(&sample()),
-            "nhs-number, document-verified: 943 476 5919"
+            "nhs-number-gb, document-verified: 943 476 5919"
         );
     }
 

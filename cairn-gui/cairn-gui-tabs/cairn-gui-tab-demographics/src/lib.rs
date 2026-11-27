@@ -103,7 +103,7 @@ mod tests {
         let node = tab.semantics(&ctx());
         let labels: Vec<String> = node.fields.iter().map(|f| f.label.clone()).collect();
         assert!(
-            labels.iter().any(|l| l.contains("MRN")),
+            labels.iter().any(|l| l.contains("mrn")),
             "MRN identifier surfaced"
         );
     }

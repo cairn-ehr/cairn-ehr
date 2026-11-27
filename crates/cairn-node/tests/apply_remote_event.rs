@@ -408,8 +408,8 @@ async fn twinless_demographic_is_refused_at_apply_like_submit() {
         signer_key_id: kid.clone(),
         contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
         payload: serde_json::json!({
-            "value": "943 476 5919", "system": "nhs-number", "provenance": "document-verified",
-            "normalized": "9434765919", "profile": "nhs-number@b3-abc", "use": "national-id"
+            "value": "943 476 5919", "system": "nhs-number-gb", "provenance": "document-verified",
+            "normalized": "9434765919", "profile": "nhs-number-gb@b3-abc", "use": "national-id"
         }),
         attachments: vec![],
         plaintext_twin: None,

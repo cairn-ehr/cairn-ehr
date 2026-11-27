@@ -65,7 +65,7 @@ pub struct SearchTerms<'a> {
     pub name_tokens: &'a [String],
     /// ISO `YYYY-MM-DD`, or `None` when not asked/not known.
     pub birth_date: Option<&'a str>,
-    /// `(system, value)` pairs, e.g. `("MRN", "12345")`.
+    /// `(system, value)` pairs, e.g. `("mrn", "12345")`.
     pub identifiers: &'a [(String, String)],
 }
 
@@ -165,7 +165,7 @@ mod tests {
     fn standard_registration_carries_its_search() {
         let ids = displayed();
         let toks = tokens();
-        let sys: Vec<(String, String)> = vec![("MRN".into(), "12345".into())];
+        let sys: Vec<(String, String)> = vec![("mrn".into(), "12345".into())];
         let a = RegistrationAssertion {
             class: RegistrationClass::Standard,
             basis: None,
@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(b["class"], "standard");
         assert_eq!(b["search"]["query"]["birth_date"], "1980-01-01");
         assert_eq!(b["search"]["query"]["name_tokens"][0], "smith");
-        assert_eq!(b["search"]["query"]["identifiers"][0]["system"], "MRN");
+        assert_eq!(b["search"]["query"]["identifiers"][0]["system"], "mrn");
         assert_eq!(b["search"]["query"]["identifiers"][0]["value"], "12345");
         assert_eq!(b["search"]["displayed"][0], ids[0].to_string());
         assert_eq!(b["search"]["incomplete"], false);

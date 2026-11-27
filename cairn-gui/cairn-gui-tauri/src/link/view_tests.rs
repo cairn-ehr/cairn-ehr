@@ -374,8 +374,8 @@ fn an_identifier_finding_is_never_called_verified() {
         right: id(2),
         kind: "identifier".into(),
         severity: "hard_veto".into(),
-        subject: "medicare".into(),
-        detail: "same system 'medicare', no shared normalized identifier".into(),
+        subject: "medicare-au".into(),
+        detail: "same system 'medicare-au', no shared normalized identifier".into(),
     };
     let hard = finding_line(&f);
     assert!(

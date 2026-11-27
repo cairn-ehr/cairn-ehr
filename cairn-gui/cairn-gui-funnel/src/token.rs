@@ -837,7 +837,7 @@ mod tests {
         // `SearchQuery::is_empty` already says an identifier alone is a real search. A store
         // that required a name would silently make MRN-only registration impossible.
         let mut store = TokenStore::new();
-        let q = SearchQuery::new("", None, &[("MRN".into(), "12345".into())]);
+        let q = SearchQuery::new("", None, &[("mrn".into(), "12345".into())]);
         assert!(store.record(q, list_of(0)).is_ok());
     }
 

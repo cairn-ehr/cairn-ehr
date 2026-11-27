@@ -186,7 +186,7 @@ async fn an_identifier_only_match_outranks_one_token_namesakes() {
     let dup = chart_named(&c, &sk, &kid, 100, "Peggy Jones").await;
     let mrn = IdentifierAssertion {
         value: "77001",
-        system: "MRN",
+        system: "mrn",
         provenance: "document-verified",
         normalized: None,
         profile: None,
@@ -211,7 +211,7 @@ async fn an_identifier_only_match_outranks_one_token_namesakes() {
     let query = SearchQuery::new(
         "Margaret Smith",
         None,
-        &[("MRN".to_string(), "77001".to_string())],
+        &[("mrn".to_string(), "77001".to_string())],
     );
     let list = cairn_node::patient::search::search_patients(&c, &query, "2026-09-26")
         .await

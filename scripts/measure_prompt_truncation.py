@@ -376,7 +376,7 @@ def seed_sql(people: list[tuple[str, str, str]]) -> list[str]:
         for pid, _, dob in people
     )
     mrns = ",\n".join(
-        f"('{pid}', 'MRN', '{mrn_of(pid)}', '{mrn_of(pid)}', 'document-verified', 1, 0, '{ORIGIN}')"
+        f"('{pid}', 'mrn', '{mrn_of(pid)}', '{mrn_of(pid)}', 'document-verified', 1, 0, '{ORIGIN}')"
         for pid, _, _ in people
     )
     return [
@@ -395,7 +395,7 @@ def batch_query_sql(samples: list[tuple[str, str, str]], mrns: list[str | None] 
     mrns = mrns or [None] * len(samples)
 
     def identifiers(mrn: str | None) -> str:
-        return quote_literal(json.dumps([{"system": "MRN", "value": mrn}] if mrn else []))
+        return quote_literal(json.dumps([{"system": "mrn", "value": mrn}] if mrn else []))
 
     values = ",\n".join(
         "({i}, ARRAY[{toks}]::text[], '{dob}', {ids}::jsonb)".format(
@@ -519,7 +519,7 @@ def self_test() -> int:
     sql = seed_sql([("00000000-0000-0000-0000-000000000001", "O'Brien Ann", "1980")])
     assert "'O''Brien Ann'" in sql[0] and "'1980'" in sql[1]
     assert "ARRAY['ann','brien','o''brien']" in batch_query_sql([("x", "O'Brien Ann", "1980")])
-    assert "'MRN'" in sql[2]
+    assert "'mrn'" in sql[2]
     assert '"value": "M1"' in batch_query_sql([("x", "Ann", "1980")], ["M1"])
     assert "'[]'::jsonb" in batch_query_sql([("x", "Ann", "1980")])
     # A candidate the rig did not seed (a test suite's leftover chart) is named, not a KeyError.
