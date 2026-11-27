@@ -118,7 +118,8 @@ pub struct PatientNoteList {
 
 /// The notes of every chart in `charts`, with what grades their authorship.
 ///
-/// The attester comes through db/065's `cairn_note_vouched_attester` door, which answers only
+/// The attester comes through db/087's `cairn_note_vouched_attesters` door (db/065's one-event
+/// door, asked about many events at once), which answers only
 /// for an attester `cairn_attestation_vouched` clears: db/020 can store a peer's attester key
 /// UNVERIFIED, and minting a `VerifiedKid` from such a row would re-open #412 (see
 /// `VerifiedKid::from_event_log_column`). A door, because the window role may not call the
@@ -153,8 +154,10 @@ pub struct PatientNoteList {
 /// (ms since the epoch) and `e.hlc_counter`: its HLC stamp (`NoteRow::recorded_at` and
 /// `recorded_counter`), what the supervision record is judged at.
 ///
-/// **Four CTEs, for cost, not meaning (#1021).** `base` reads each part's KEYS and time once (the
-/// WHERE runs here, and the attester door once per part); `facts` asks the key doors about each
+/// **Five CTEs, for cost, not meaning (#1021).** `parts` reads each part's KEYS and time once (the
+/// WHERE runs here); `base` adds its verified attester from ONE call of db/087's set door for all
+/// of `parts` (a part without one has no row there, so its attester reads NULL, as db/065's
+/// one-event door answers); `facts` asks the key doors about each
 /// DISTINCT key those parts name (`k`, the drafted key, the envelope signer) exactly once; `kept`
 /// is the parts the second argument KEEPS; `rows` builds everything else that is a fact of the part
 /// (text, contributors, vouches) for those parts only. The final SELECT joins `rows` and `facts`, so
@@ -170,13 +173,17 @@ pub struct PatientNoteList {
 macro_rules! notes_sql {
     ($where:literal, $keep:literal) => {
         concat!(
-    // `base`: one row per part, its keys and time only (the WHERE runs here).
-    "WITH base AS MATERIALIZED (SELECT n.event_id, e.signer_key_id, g.attester, \
+    // `parts`: one row per part, its keys and time only (the WHERE runs here).
+    "WITH parts AS MATERIALIZED (SELECT n.event_id, e.signer_key_id, \
             (SELECT c ->> 'actor_id' FROM jsonb_array_elements(e.contributors) c \
               WHERE c ->> 'role' = 'drafted' LIMIT 1) AS drafted, e.hlc_wall, e.hlc_counter \
        FROM clinical_note n JOIN event_log e ON e.event_id = n.event_id \
-      CROSS JOIN LATERAL (SELECT cairn_note_vouched_attester(e.event_id) AS attester) g \
       WHERE ", $where, "), \
+     base AS MATERIALIZED (SELECT p.event_id, p.signer_key_id, g.attester, p.drafted, p.hlc_wall, \
+            p.hlc_counter \
+       FROM parts p \
+       LEFT JOIN cairn_note_vouched_attesters((SELECT array_agg(event_id) FROM parts)) g \
+         ON g.event_id = p.event_id), \
      facts AS MATERIALIZED (SELECT key, cairn_note_signer_name(key) AS name, cairn_note_key_actor(key) AS actor, \
             cairn_note_key_role(key) AS role, cairn_key_confirmation(key) AS confirmation, \
             cairn_note_key_is_human(key) AS human \
@@ -239,10 +246,11 @@ const NOTES_SQL: &str = notes_sql!("n.patient_id = ANY($1::text[]::uuid[])", "TR
 /// the record never required co-signing for, and is outside the window: owed to no one, listed by
 /// no one. `tests/note_person_menu.rs` re-reads every menu scenario 30 days on, when only the other
 /// terms can keep a part, and asserts the same groups 1 and 2; removing any one term fails a test.
-// shortcut: `base` still scans every part the keys ever wrote, one attester-door call each, and
-// every part by a student or a writer ever required co-signing is kept, cleared or not. Measured
-// by `examples/measure_person_menu.rs` (results/2026-11-08-person-menu-reads-macos-m3max.md).
-// Upgrade to a projection of open obligations when a node outgrows it, see #1021.
+// shortcut: `parts` still scans every part the keys ever wrote (their attesters in one set-door
+// call), and every part by a student or a writer ever required co-signing is kept, cleared or
+// not. Measured by `examples/measure_person_menu.rs`
+// (results/2026-11-08-person-menu-reads-macos-m3max.md). Upgrade to a projection of open
+// obligations when a node outgrows it, see #1021.
 const NOTES_BY_KEYS_SQL: &str = notes_sql!(
     "e.signer_key_id = ANY($1::text[]) OR EXISTS (SELECT 1 FROM jsonb_array_elements(e.contributors) c \
       WHERE c ->> 'actor_id' = ANY($1::text[]))",
@@ -451,6 +459,12 @@ pub async fn list_patient_notes(
 mod tests {
     use super::{by_discarder, NOTES_BY_KEYS_SQL, NOTES_SQL};
 
+    /// db/065's one-event door. The vouch column still calls it, once per vouch.
+    const PER_PART_DOOR: &str = "cairn_note_vouched_attester(";
+    /// db/087's set door, asked once about every part the WHERE kept (`parts`).
+    const SET_DOOR_CALL: &str =
+        "cairn_note_vouched_attesters((SELECT array_agg(event_id) FROM parts))";
+
     /// PR #984 review: the marker reads the writer word back, never defaults it.
     #[test]
     fn a_writer_word_this_build_does_not_know_is_an_error() {
@@ -465,8 +479,9 @@ mod tests {
     /// it is a human's) are looked up once per DISTINCT key, in the `facts` CTE, never once per
     /// row. Measured: at 100 000 notes over 40 keys the per-row calls were 88% of the menu's
     /// 10.4 s counts read. So outside the vouch column (whose calls run once per VOUCH, a few
-    /// rows) each key-fact function is named exactly once, and the verified attester is computed
-    /// once per row (it was twice: its own column and the lateral `k`).
+    /// rows) each key-fact function is named exactly once. The verified attesters come from ONE
+    /// call of db/087's set door for every part the WHERE kept, never one call per part: at a
+    /// ward-year that per-part call was about a fifth of the counts read (#1021, PR #1202).
     #[test]
     fn key_facts_are_looked_up_once_per_key_not_once_per_row() {
         const KEY_FACTS: [&str; 5] = [
@@ -482,13 +497,8 @@ mod tests {
             for f in KEY_FACTS {
                 assert_eq!(outside_vouches.matches(f).count(), 1, "{f} in {sql}");
             }
-            assert_eq!(
-                outside_vouches
-                    .matches("cairn_note_vouched_attester(e.event_id)")
-                    .count(),
-                1,
-                "{sql}"
-            );
+            assert_eq!(outside_vouches.matches(PER_PART_DOOR).count(), 0, "{sql}");
+            assert_eq!(outside_vouches.matches(SET_DOOR_CALL).count(), 1, "{sql}");
         }
     }
 
@@ -515,7 +525,7 @@ mod tests {
     fn the_attester_is_read_only_through_the_vouch_door() {
         // Both expansions of `notes_sql!` (by chart, by keys) share the guard.
         for sql in [NOTES_SQL, NOTES_BY_KEYS_SQL] {
-            assert!(sql.contains("cairn_note_vouched_attester(e.event_id)"));
+            assert!(sql.contains(SET_DOOR_CALL), "{sql}");
             assert!(
                 !sql.contains("attester_key"),
                 "the raw attester column must never reach the classifier: {sql}"

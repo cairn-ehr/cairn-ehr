@@ -541,6 +541,11 @@ const SCHEMA: &[(&str, &str)] = &[
         "086_release_store",
         include_str!("../../../db/086_release_store.sql"),
     ),
+    // db/087 (#1021): the verified attesters of many parts in one call, for the note reads.
+    (
+        "087_note_vouched_attesters",
+        include_str!("../../../db/087_note_vouched_attesters.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

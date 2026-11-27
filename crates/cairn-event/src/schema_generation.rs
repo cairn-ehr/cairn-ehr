@@ -39,10 +39,10 @@
 //! crate both loaders already depend on.
 
 /// The numeric prefix of the newest migration in `db/`
-/// (`db/086_release_store.sql` → 86).
+/// (`db/087_note_vouched_attesters.sql` → 87).
 ///
 /// Bump this in the same commit that adds a `db/*.sql` file; the guard test enforces it.
-pub const SCHEMA_GENERATION: i32 = 86;
+pub const SCHEMA_GENERATION: i32 = 87;
 
 /// The oldest schema generation an older reference-UI window may run against (#909 slice C1).
 ///
@@ -72,6 +72,12 @@ pub const WINDOW_FLOOR_LEDGER: &[FloorEntry] = &[
         generation: 86,
         floor: 85,
         why: "adds the release store and its read-only doors; no window renders a new state",
+        old_window_misses: None,
+    },
+    FloorEntry {
+        generation: 87,
+        floor: 85,
+        why: "adds a set-returning attester door for the note reads; db/065's one-event door stays",
         old_window_misses: None,
     },
 ];

@@ -135,7 +135,8 @@ async function openMenuRow(row) {
       setMessage(el("person-menu-status"), signOutcomeLine(outcome));
       return;
     }
-    if (displayedPatient) await closeChart();
+    // No menu read on the way out: `person_menu_open` re-reads it, and so does either outcome (#1021).
+    if (displayedPatient) await closeChart({ menuReadFollows: true });
     try {
       const header = await invoke("person_menu_open", { patientId: row.patient_id });
       pendingMenuFocus = row.focus;

@@ -66,16 +66,18 @@ function chartAct(run, saidIn) {
 /**
  * Take the chart off screen. A close already in progress is joined, never run twice: two would
  * interleave their queued saves, and the second's `close_chart` could close the NEXT chart on the
- * backend (#1137).
+ * backend (#1137). `menuReadFollows`: the caller re-reads the person menu itself straight after
+ * (the menu's "Open note", #1021), so the close skips its own read. A caller joining a close
+ * already in progress gets that close's choice; the menu's open re-reads on either outcome.
  */
-function closeChart() {
-  closing ??= leaveChart().finally(() => {
+function closeChart({ menuReadFollows = false } = {}) {
+  closing ??= leaveChart(menuReadFollows).finally(() => {
     closing = null;
   });
   return closing;
 }
 
-async function leaveChart() {
+async function leaveChart(menuReadFollows) {
   // #1130: every act in flight on this chart settles FIRST, so its answer is said here and its
   // re-read is of this chart. Clearing `displayedPatient` before it would make the answer think
   // its chart was left, and say it nowhere — or on the next patient's chart.
@@ -103,7 +105,8 @@ async function leaveChart() {
   resetFrontDoor();
   el("browse-name").focus();
   void refreshTray();
-  void refreshMenuCount(); // person_menu.js: a saved draft may have moved the count
+  // person_menu.js: a saved draft may have moved the count
+  if (!menuReadFollows) void refreshMenuCount();
   updateAfterClose(); // update.js: below the floor, the chart being finished has closed
 }
 

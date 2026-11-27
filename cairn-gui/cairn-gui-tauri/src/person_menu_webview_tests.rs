@@ -21,7 +21,10 @@ fn open_menu_row_settles_signs_and_closes_the_chart_before_opening() {
         open,
         "const outcome = signInFlight() ? await signsSettled() : null;",
     );
-    let close = position(open, "if (displayedPatient) await closeChart();");
+    let close = position(
+        open,
+        "if (displayedPatient) await closeChart({ menuReadFollows: true });",
+    );
     let ask = position(open, "invoke(\"person_menu_open\"");
     let enter = position(open, "enterChart(");
     assert!(settle < close && close < ask && ask < enter, "{open}");
@@ -45,6 +48,38 @@ fn open_menu_row_settles_signs_and_closes_the_chart_before_opening() {
             < position(open, "const outcome = signInFlight()"),
         "{open}"
     );
+}
+
+/// #1021: "Open note" from an open chart read the menu three times — `closeChart`'s refresh, then
+/// `person_menu_open`'s own re-read, then the note pane's. The close skips its refresh when an
+/// open follows (each outcome of the open re-reads: the note pane's draw, or the refusal's catch),
+/// and every other close still re-reads.
+#[test]
+fn an_open_from_the_menu_skips_the_closes_own_menu_read() {
+    let open = js_fn(MENU_JS, "openMenuRow");
+    assert!(
+        open.contains("if (displayedPatient) await closeChart({ menuReadFollows: true });"),
+        "{open}"
+    );
+    let close = js_fn(LEAVE_JS, "closeChart");
+    assert!(
+        close.contains("function closeChart({ menuReadFollows = false } = {})")
+            && close.contains("leaveChart(menuReadFollows)"),
+        "{close}"
+    );
+    let leave = js_fn(LEAVE_JS, "leaveChart");
+    assert!(
+        leave.contains("if (!menuReadFollows) void refreshMenuCount();"),
+        "{leave}"
+    );
+    // No other caller passes the option, in ANY script (idle.js's re-lock and update.js's Update
+    // now close the chart too): their closes still re-read the menu.
+    let passes: Vec<(String, usize)> = crate::leave_chart_webview_tests::scripts()
+        .into_iter()
+        .map(|(name, js)| (name, js.matches("menuReadFollows: true").count()))
+        .filter(|(_, n)| *n > 0)
+        .collect();
+    assert_eq!(passes, [("person_menu.js".to_string(), 1)], "{passes:?}");
 }
 
 /// The button's visible words and its accessible name are both Rust's, and are two fields.
@@ -252,7 +287,10 @@ fn open_menu_row_stays_on_a_chart_whose_act_did_not_go_through() {
     );
     let stay = position(open, "if (outcome && !SETTLED_WELL.has(outcome)) {");
     let said = position(open, "signOutcomeLine(outcome)");
-    let close = position(open, "if (displayedPatient) await closeChart();");
+    let close = position(
+        open,
+        "if (displayedPatient) await closeChart({ menuReadFollows: true });",
+    );
     assert!(settle < stay && stay < said && said < close, "{open}");
     assert!(open[stay..close].contains("return;"), "{open}");
     assert!(
