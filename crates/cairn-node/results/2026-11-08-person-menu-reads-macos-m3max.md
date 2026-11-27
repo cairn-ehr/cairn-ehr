@@ -132,14 +132,38 @@ rule's worst case, and it costs a little:
 
 That case needs a node's whole history to fall within one week: 33 000 notes is a ward-year, not a ward-week.
 
+## 2026-11-27 — one attester call per read, and "Open note" reads the menu twice
+
+A fresh node, seeded the same way to 33 000 notes, was profiled (`EXPLAIN ANALYZE` + `track_functions`) at the
+steady state. The counts read's SQL took about 177 ms. Of that, `base` took 98 ms, and most of it was db/065's
+`cairn_note_vouched_attester` called once per part: 33 000 calls, although no part on the node has an attester.
+`kept`'s sort spilled to disk, but raising `work_mem` to 64 MB bought only about 5%. The narrative is a small share
+of `rows`, so the "narrower column list" lever was not taken. No index helps either read: the counts read matches
+every row, and the bar's key filter is an `OR` over a jsonb `EXISTS`.
+
+**The change.** db/087's `cairn_note_vouched_attesters(uuid[])` has the same predicate, asked once about every part
+the WHERE kept (`notes_sql!`'s new `parts` CTE). A prototype on this node gave the same output row for row
+(`EXCEPT ALL`, both directions). A/B against `main`'s rig on the same node, runs interleaved:
+
+| 33 000 notes | bar | counts | pick behind counts |
+|---|---:|---:|---:|
+| steady state (`--later-days 8`), `main` | 129–142 ms | 212–222 ms | 348–354 ms |
+| steady state, db/087 | 109–120 ms | 171–180 ms | 287–292 ms |
+| whole history inside the review week (`--later-days 0`), `main` | 325–351 ms | 680–725 ms | **1 006–1 077 ms** |
+| the same, db/087 | 281–285 ms | 592–635 ms | 873–920 ms |
+
+That is about 18% off the steady state, and the worst case now fits the 1 s budget.
+
+**"Open note" from an open chart** read the menu three times: `closeChart`'s refresh, `person_menu_open`'s re-read
+(the authority check), and the drawn note pane's. The close now skips its own read when the open follows (both
+outcomes of the open re-read). That saves one bar read, about 110 ms here, from that press.
+
 ## What is left, in #1021
 
 - The **projection of open obligations** (one row per part that waits for someone, kept by the appliers), so the
   menu reads O(obligations), not O(history). With the keep rule a ward-year fits the budget; the projection is
   needed for a facility-sized node, or a ward whose co-sign-required writers write most of its notes.
-- Cheaper levers, not taken here:
-  - drop `closeChart`'s menu refresh when `person_menu_open` follows ("Open note" from an open chart reads the menu
-    three times);
-  - stop the picker's counts read from blocking a pick, e.g. by reading the counts after the pick or on their own
-    connection.
+- One cheaper lever, not taken: stop the picker's counts read from blocking a pick, e.g. by reading the counts on
+  their own connection (one more session per terminal through the gateway, #1165) or in chunks a pick can cut in
+  between. (The `closeChart` lever was taken on 2026-11-27, above.)
 - The **Pi** figures (the issue asks for both machines). The rig runs unchanged against a Pi node.
