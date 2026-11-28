@@ -28,6 +28,7 @@ use uuid::Uuid;
 /// back that savepoint, or the whole transaction, before using it again. The #815
 /// outcome-unknown mapping is NOT applied here: the caller owns the commit, so it applies
 /// `db_diagnosis::commit_failure` to its own commit using the returned event id.
+#[allow(clippy::too_many_arguments)] // signer + node context + what was typed, and the mark
 pub async fn register_patient_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     sk: &SigningKey,

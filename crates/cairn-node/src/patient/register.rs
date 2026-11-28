@@ -173,6 +173,7 @@ pub fn dob_precision(value: &str) -> anyhow::Result<&'static str> {
 /// module doc). `cairn-event`'s builder takes borrowed slices, so this borrows straight out
 /// of `attestation` rather than cloning — the borrow only needs to live for this call, which
 /// is all `registration_assertion_body`/`render_registration_twin` require.
+#[allow(clippy::too_many_arguments)] // ids + class, the mark, basis, search + signer, clock
 pub fn build_registration_body(
     event_id: Uuid,
     patient_id: Uuid,
