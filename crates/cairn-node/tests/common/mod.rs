@@ -479,6 +479,7 @@ pub async fn submit_registration(
     let tokens = [p.to_string()];
     let a = RegistrationAssertion {
         class: RegistrationClass::Standard,
+        synthetic: false,
         basis: None,
         search: Some(SearchAttestationInput {
             terms: SearchTerms {

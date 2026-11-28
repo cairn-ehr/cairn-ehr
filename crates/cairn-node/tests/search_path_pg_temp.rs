@@ -370,6 +370,7 @@ async fn the_decoy_still_mirrors_every_column_the_doors_insert() {
 fn registration_spec(p: Uuid, tokens: &[String]) -> EventSpec<'_> {
     let a = RegistrationAssertion {
         class: RegistrationClass::Standard,
+        synthetic: false,
         basis: None,
         search: Some(SearchAttestationInput {
             terms: SearchTerms {

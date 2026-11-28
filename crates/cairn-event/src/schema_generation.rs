@@ -39,10 +39,10 @@
 //! crate both loaders already depend on.
 
 /// The numeric prefix of the newest migration in `db/`
-/// (`db/087_note_vouched_attesters.sql` → 87).
+/// (`db/088_synthetic_patient.sql` → 88).
 ///
 /// Bump this in the same commit that adds a `db/*.sql` file; the guard test enforces it.
-pub const SCHEMA_GENERATION: i32 = 87;
+pub const SCHEMA_GENERATION: i32 = 88;
 
 /// The oldest schema generation an older reference-UI window may run against (#909 slice C1).
 ///
@@ -78,6 +78,15 @@ pub const WINDOW_FLOOR_LEDGER: &[FloorEntry] = &[
         generation: 87,
         floor: 85,
         why: "adds a set-returning attester door for the note reads; db/065's one-event door stays",
+        old_window_misses: None,
+    },
+    FloorEntry {
+        generation: 88,
+        floor: 85,
+        why: "adds the synthetic-patient mark and its reads (ADR-0115). No window shows the mark \
+              yet, so the floor stays: raising it now would lock every terminal out with no \
+              newer window to move to. It is OWED a raise by the slice that gives the window \
+              the band, because an older window shows a training patient as a real one",
         old_window_misses: None,
     },
 ];

@@ -147,6 +147,7 @@ pub async fn register_chart(c: &Client, sk: &SigningKey, kid: &str, patient: Uui
     let tokens = [patient.to_string()];
     let a = cairn_event::registration::RegistrationAssertion {
         class: cairn_event::registration::RegistrationClass::Standard,
+        synthetic: false,
         basis: None,
         search: Some(cairn_event::registration::SearchAttestationInput {
             terms: cairn_event::registration::SearchTerms {

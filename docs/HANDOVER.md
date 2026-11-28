@@ -160,8 +160,9 @@
 > It lists each premise with HOW it is known. Two were RUN before the plan was written
 > (`tests/registration_tolerates_an_unknown_field.rs`: both doors admit a registration with a field the build does not
 > know, register the chart and keep the field, so an older build shows a synthetic chart as real and marks it on
-> upgrade + reproject). Five are only READ. **⇒ next on this thread: the plan's Task 0, which runs those five and
-> builds nothing.** The #1207 plan is withdrawn (its file says so).
+> upgrade + reproject). The other five were run or checked in Task 0 (2026-11-28): all hold, each already pinned by a
+> test in the tree, named in the plan's table. **⇒ next on this thread: Tasks 1 and 2 together** (the mark, and the
+> line it draws; not safe apart). The #1207 plan is withdrawn (its file says so).
 
 > [!NOTE]
 > **Merged 2026-10-18 → 10-31** (PRs #802 → #895; ROADMAP has each, durable-rules their blocks; ADR-0081, ADR-0082).

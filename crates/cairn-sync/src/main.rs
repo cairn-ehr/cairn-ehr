@@ -13276,6 +13276,7 @@ mod schema_subset_tests {
         let tokens = [patient_id.to_string()];
         let a = cairn_event::registration::RegistrationAssertion {
             class: cairn_event::registration::RegistrationClass::Standard,
+            synthetic: false,
             basis: None,
             search: Some(cairn_event::registration::SearchAttestationInput {
                 terms: cairn_event::registration::SearchTerms {

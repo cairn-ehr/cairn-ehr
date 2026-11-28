@@ -25,11 +25,11 @@ rests on is listed with how it is known. **A row marked READ is a task before it
 |---|---|---|
 | 1 | Both doors admit a registration carrying a payload field the build does not know, register the chart, and keep the field in the stored body | **RUN**: `tests/registration_tolerates_an_unknown_field.rs`, written for this plan, green against PG 18 on `main` |
 | 2 | The floor does not compare a registration's twin with a derivation of its own, so a later build may word it differently | **RUN**: the same test submits a reworded twin |
-| 3 | A link arriving from a peer is ADMITTED whatever local state says, and doubt is expressed by withholding its effect at read time | READ: db/018's comment at the veto ("a remote refusal would fork honest nodes"), db/054 case (b). Task 0 runs it |
-| 4 | A human-attested link passes the existing hard veto | READ: `NOT v_attested AND cairn_has_hard_veto` in db/018. Task 0 runs it, because ADR-0115 needs a refusal an attestation does NOT lift |
-| 5 | `patient_registration_current` picks one registration per chart, deterministically | READ: db/045 section 6. Task 0 asserts it for two registrations of one chart that disagree about the mark |
-| 6 | The search door returns chart ids only, and a candidate's details are read separately, so a new candidate fact needs no change to a door a window already calls | READ: `cairn_search_candidates` returns `(patient_id, matched_pass)`. Task 0 confirms against `db/window_door_surface.txt` |
-| 7 | The window's registration reaches the node through `cairn_registration_submit`, whose argument list is fixed, so carrying the mark needs an additive door (ADR-0111) | READ. Task 4 decides the shape; it is not assumed here |
+| 3 | A link arriving from a peer is ADMITTED whatever local state says, and doubt is expressed by withholding its effect at read time | **RUN** (Task 0): `link_veto_floor.rs::remote_vetoed_link_admitted_flagged_and_under_review`, already in the tree, green |
+| 4 | A human-attested link passes the existing hard veto, so ADR-0115's refusal needs a rule an attestation does NOT lift | **RUN** (Task 0): `link_veto_floor.rs::human_attested_link_with_hard_veto_still_passes` and `agent_link_with_hard_veto_refused_at_local_door`, green |
+| 5 | `patient_registration_current` picks one registration per chart, the EARLIEST, whatever the arrival order | **RUN** (Task 0): `patient_registration.rs::the_projection_keeps_every_registration_and_the_view_picks_the_earliest`, green. Two registrations that disagree about the mark cannot be tested until the field exists; that is Task 1's |
+| 6 | The search door returns chart ids only, and a candidate's details are read separately, so a new candidate fact needs no change to a door a window already calls | **CHECKED** (Task 0) against `db/window_door_surface.txt`, which `window_door_surface.rs` holds equal to the live catalogue: `cairn_search_candidates(text[],text,jsonb) -> TABLE(patient_id uuid, matched_pass text)` |
+| 7 | The window's registration reaches the node through `cairn_registration_submit`, whose argument list is fixed, so carrying the mark needs an additive door (ADR-0111) | **CHECKED** (Task 0): the snapshot lists `cairn_registration_submit(uuid,text,jsonb,jsonb,text) -> text`. Task 4 decides the new door's shape |
 
 ## Global constraints
 
@@ -55,6 +55,13 @@ rests on is listed with how it is known. **A row marked READ is a task before it
 - The band and every mark wrap; they never clip.
 
 ## Task 0 — run the premises marked READ
+
+> [!NOTE]
+> **Done 2026-11-28; all five hold, and no new test was needed.** Each was already pinned by a test in the
+> tree, which ran green in a full `cairn-node` run against PG 18 on `main`. The table above names them.
+> **One thing Task 0 found that the plan had not said:** `db/window_door_surface.txt` lists the COLUMNS of
+> `patient_registration` and `patient_registration_current` as window-readable. So Task 1's new column is a change
+> to the window's surface (an additive one), and that snapshot and its header are regenerated in the same commit.
 
 Nothing is built here. Each becomes a test that passes on `main`, kept as a pin.
 
@@ -88,7 +95,9 @@ Tests first: unit tests in `cairn-event::registration`; `db/tests/088_synthetic_
 - [ ] Reprojection (db/039) rebuilds the column from the log; a registration with the field admitted
       by an OLDER build (premise 1) becomes marked when that node upgrades and reprojects. Tested by
       inserting through the door, dropping the column's value, and reprojecting.
-- [ ] `SCHEMA_GENERATION` 88 and its ledger entry.
+- [ ] `SCHEMA_GENERATION` 88 and its ledger entry, **with the window floor left at 85**. No window can
+      show the mark yet, so raising the floor here would lock every terminal out with no newer window
+      to move to. The entry's `why` says that the floor is owed a raise by Task 5.
 
 ## Task 2 — no link across the line (db/088, db/018, db/054, db/016)
 
@@ -161,6 +170,12 @@ Tests first: pure tests on the text and row builders; golden tests where a colum
       memory, and list them in the PR: the person menu (ADR-0095), the funnel's prompts, the
       medication list's combined-read header, `medication-list`, `patient-sensitivity`,
       `patient-safety`, the duplicate-review worklist.
+- [ ] **Raise the window floor** (ADR-0111) in the commit that gives the window the band, with
+      `old_window_misses: Some("which patients are synthetic")`. An older window shows a training
+      patient as a real one, which is exactly the misbehaviour the floor exists to stop: below the
+      floor a terminal is told it needs its update and may open no further chart. This is the one
+      place ADR-0115's "an older build shows it as real" CAN be closed, and only for the window; a
+      node on an older build is still as ADR-0115 says.
 - [ ] A source-level guard, in the manner of the existing inventory tests, that fails when a new
       builder of a patient row does not read `Candidate.synthetic` or `cairn_chart_synthetic`. Without
       it decision 7 holds only until the next surface is added.
