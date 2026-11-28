@@ -20,7 +20,7 @@ pub mod query;
 pub mod rank;
 
 pub use attestation::SearchAttestation;
-pub use candidate::{age_years, Age, Candidate, CandidateList, TrustState};
+pub use candidate::{age_years, Age, Candidate, CandidateList, PatientKind, TrustState};
 pub use list_wire::DoubtedRowOutOfRange;
 pub use person::{group_by_person, MissingComponent, PersonRow};
 pub use prompt_bound::{bound_for_prompt, node_reason, PromptCounts, PromptList, PROMPT_CAP};

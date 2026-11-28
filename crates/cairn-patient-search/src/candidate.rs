@@ -120,10 +120,51 @@ pub fn age_years(birth_date: &str, today: &str) -> Option<u32> {
     u32::try_from(years).ok()
 }
 
+/// Whether a chart is of an invented patient (ADR-0115): a training or test chart.
+///
+/// THREE values, never two (principle 4). `Unknown` is a chart whose registration this node
+/// does not hold, which is an ordinary state: a peer's clinical event legitimately arrives
+/// before the registration that licenses it. `Unknown` is NOT `Real`, and no surface may
+/// draw it as one: an invented patient shown as a person is the failure this type exists
+/// to prevent.
+///
+/// `Unknown` is the `Default`, and the field that carries this is `#[serde(default)]`, on
+/// purpose: a candidate serialised by a build that predates the mark has no such field, and
+/// "that build did not say" is exactly `Unknown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PatientKind {
+    /// Registered as synthetic. Not a real person.
+    Synthetic,
+    /// Registered, and not as synthetic.
+    Real,
+    /// This node holds no registration for the chart, or was not told.
+    #[default]
+    Unknown,
+}
+
+impl PatientKind {
+    /// From the floor's own word (`cairn_chart_synthetic`, db/088). **Pure.**
+    ///
+    /// Anything but the two words that function is known to give reads `Unknown`: a word
+    /// from a later build must never be guessed into `Real`.
+    pub fn from_floor(word: &str) -> Self {
+        match word {
+            "synthetic" => PatientKind::Synthetic,
+            "real" => PatientKind::Real,
+            _ => PatientKind::Unknown,
+        }
+    }
+}
+
 /// One chart offered to the clerk before they may create a new one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Candidate {
     pub patient_id: Uuid,
+    /// Synthetic, real, or not known here (ADR-0115). Every surface that names this
+    /// candidate must show it; see [`PatientKind`] for why `Unknown` is the default.
+    #[serde(default)]
+    pub kind: PatientKind,
     /// The §4.2 display-winner name, or the John Doe callsign.
     pub display_name: String,
     pub age: Option<Age>,
@@ -195,6 +236,41 @@ impl CandidateList {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR-0115: the floor's word becomes a kind, and anything unrecognised is `Unknown`,
+    /// never `Real`.
+    #[test]
+    fn a_kind_is_read_from_the_floors_word_and_doubt_is_never_real() {
+        assert_eq!(PatientKind::from_floor("synthetic"), PatientKind::Synthetic);
+        assert_eq!(PatientKind::from_floor("real"), PatientKind::Real);
+        for word in ["unknown", "", "training", "REAL", "Synthetic"] {
+            assert_eq!(
+                PatientKind::from_floor(word),
+                PatientKind::Unknown,
+                "{word:?}"
+            );
+        }
+        assert_eq!(PatientKind::default(), PatientKind::Unknown);
+    }
+
+    /// A candidate serialised by a build that predates the mark carries no `kind`. Reading
+    /// it must give `Unknown`: that build did not say.
+    #[test]
+    fn a_candidate_from_an_older_build_reads_as_unknown_kind() {
+        let old = serde_json::json!({
+            "patient_id": "00000000-0000-0000-0000-000000000001",
+            "display_name": "Jo Smith",
+            "age": null,
+            "trust": "confirmed",
+            "last_activity": null,
+            "locale": null,
+            "photo_ref": null
+        });
+        let c: Candidate = serde_json::from_value(old).expect("an older candidate still reads");
+        assert_eq!(c.kind, PatientKind::Unknown);
+        let back = serde_json::to_value(&c).unwrap();
+        assert_eq!(back["kind"], "unknown");
+    }
     use uuid::Uuid;
 
     #[test]
@@ -283,6 +359,7 @@ mod tests {
         // The wire shape of a person row with TWO members: it must serialize as a JSON array
         // (what a peer or the window reads) and come back equal, member order included.
         let member = |n: u128, name: &str| Candidate {
+            kind: crate::PatientKind::Real,
             patient_id: Uuid::from_u128(n),
             display_name: name.into(),
             age: None,
@@ -353,6 +430,7 @@ mod tests {
         // and must never sit on the search latency path), which is a property of the
         // SERIALIZED form, not of a struct literal.
         let c = Candidate {
+            kind: crate::PatientKind::Real,
             patient_id: Uuid::from_u128(1),
             display_name: "Smith, John".into(),
             age: Some(Age {
@@ -375,9 +453,12 @@ mod tests {
         // not serde's default variant name ("Confirmed"). One closed vocabulary, one
         // spelling, on every surface that carries it.
         assert_eq!(v["trust"], "confirmed");
+        // ADR-0115 added the eighth, `kind`: one short word ("synthetic" / "real" /
+        // "unknown") read in the same single round trip as the other display facts.
+        assert_eq!(v["kind"], "real");
         assert_eq!(
             v.as_object().unwrap().len(),
-            7,
+            8,
             "a new field on the search-latency path is a deliberate decision, not a drive-by \
              — if you added one, check it is not image bytes (ADR-0013): {json}"
         );

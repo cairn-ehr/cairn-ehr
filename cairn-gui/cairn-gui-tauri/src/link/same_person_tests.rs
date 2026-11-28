@@ -18,6 +18,7 @@ async fn window_showing(others: &[Uuid]) -> AppState {
         shown.insert(
             *id,
             Candidate {
+                kind: cairn_patient_search::PatientKind::Real,
                 patient_id: *id,
                 display_name: "Other Person".into(),
                 age: None,

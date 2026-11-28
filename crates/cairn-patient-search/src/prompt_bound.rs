@@ -227,6 +227,7 @@ mod tests {
     /// A candidate distinguishable by its id, which is the only field bounding touches.
     fn candidate(n: u128) -> Candidate {
         Candidate {
+            kind: crate::PatientKind::Real,
             patient_id: Uuid::from_u128(n),
             display_name: format!("Patient {n}"),
             age: None,

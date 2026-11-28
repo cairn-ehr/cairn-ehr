@@ -40,6 +40,7 @@ fn read(people: Vec<Person>) -> MenuRead {
 
 fn patients(chart: Uuid, name: &str) -> HashMap<Uuid, Candidate> {
     let c = Candidate {
+        kind: cairn_patient_search::PatientKind::Real,
         patient_id: chart,
         display_name: name.into(),
         age: None,
