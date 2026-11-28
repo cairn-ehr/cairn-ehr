@@ -81,6 +81,7 @@ fn matches(patient: &FixturePatient, query: &SearchQuery) -> bool {
 /// Total: every fixture yields a candidate. Nothing here can drop a row.
 fn as_candidate(patient: &FixturePatient, today: &str) -> Candidate {
     Candidate {
+        kind: cairn_patient_search::PatientKind::Real,
         // Infallible: `FixturePatient.uuid` is a parsed `Uuid`. It used to be a String parsed
         // here, and the `Option` that produced let a typo'd fixture DROP OUT of a candidate
         // list that still called itself complete — a silently-missing chart on the one screen

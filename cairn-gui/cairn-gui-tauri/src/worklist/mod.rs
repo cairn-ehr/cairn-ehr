@@ -264,6 +264,7 @@ async fn admit<'a>(state: &AppState, cands: impl Iterator<Item = &'a Candidate>)
 pub(crate) fn fixture_pair() -> (Vec<Candidate>, Vec<Candidate>) {
     let pop = cairn_gui_data::mock::fixtures::starting_population();
     let cand = |i: usize| Candidate {
+        kind: cairn_patient_search::PatientKind::Real,
         patient_id: pop[i].uuid,
         display_name: pop[i].display_name.clone(),
         age: None,

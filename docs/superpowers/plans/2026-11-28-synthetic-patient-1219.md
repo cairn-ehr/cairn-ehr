@@ -171,9 +171,12 @@ Tests first. The page decides nothing; the wording and the mark are built in Rus
 
 Tests first: pure tests on the text and row builders; golden tests where a column layout is pinned.
 
-- [ ] `Candidate.synthetic: Synthetic` (`Yes`, `No`, `Unknown`), read in `candidate_read.rs`.
-- [ ] `candidate_text.rs`: a leading mark in the NAME cell, inside the ellipsized width, so no column
-      moves and the mark is never the part that is cut.
+- [x] Built as `Candidate.kind: PatientKind` (`Synthetic`, `Real`, `Unknown`), read in
+      `candidate_read.rs` through `cairn_chart_synthetic`. `Unknown` is the type's default and the
+      field is `#[serde(default)]`, so a candidate serialised by an older build reads as unknown.
+- [x] `candidate_text.rs`: a leading mark in the NAME cell, inside the ellipsized width, so no column
+      moves and the mark is never the part that is cut. `[SYNTHETIC] ` spelled out (12 of 28
+      characters), and `[unregistered here] ` for a chart of unknown kind.
 - [ ] The chart: a permanent band, `SYNTHETIC PATIENT — not a real person`, above everything else on
       every tab. It cannot be dismissed. A chart whose registration is not held shows
       `Registration not yet received` in the same place, never nothing.

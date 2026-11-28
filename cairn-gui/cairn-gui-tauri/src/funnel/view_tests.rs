@@ -342,6 +342,7 @@ fn a_chart_opened_by_id_says_its_name_was_not_read() {
 /// A fully populated candidate, shared with the drift guard in `commands`.
 pub(crate) fn sample_candidate() -> Candidate {
     Candidate {
+        kind: cairn_patient_search::PatientKind::Real,
         patient_id: uuid::Uuid::from_u128(5),
         display_name: "Samantha Example".into(),
         age: Some(Age {
