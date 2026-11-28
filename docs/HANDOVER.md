@@ -123,6 +123,20 @@
 > > back-off itself is #903).
 
 > [!NOTE]
+> **Synthetic cohort import, 2026-11-28 (tracking #1214; NOT part of the GUI milestone).** SyntheticHealthData (a
+> sibling repository) writes an invented general-practice cohort as `cohort.sqlite`.
+> `scripts/import_synthetic_cohort.py` loads what has a door today (patients, medicines) through `cairn-node`'s own
+> verbs and reports what it left in the file; its header is the runbook. Measured on the 300-patient, seed 1 cohort
+> against a PG18 node: 300 patients and 421 medicines written, 0.2 s per registration, a second run writes nothing.
+> What it found: **the funnel showed existing charts for 34 of 300 registrations** (a shared name, a name that is the
+> start of another, or a shared date of birth alone), so a scripted load needs `--register-past-candidates`;
+> **`cairn-node`'s clinical verbs run only as the database owner** (`cairn_node` may not search, `cairn_agent` may not
+> read `local_node` or `actor_event`). No door or no stream for the rest: #1206 (an author not enrolled here) ·
+> #1207 (**nothing marks a chart or node as synthetic: never peer a node this script wrote to**) · #1208 (results) ·
+> #1209 (problem list) · #1210 (received documents) · #1211 (address, sex) · #1212 (notes and allergies outside the
+> window, bulk registration) · #1213 (ADR-0035 entities). The generator's own limits are SyntheticHealthData #18–#20.
+
+> [!NOTE]
 > **Merged 2026-10-18 → 10-31** (PRs #802 → #895; ROADMAP has each, durable-rules their blocks; ADR-0081, ADR-0082).
 > Still open from them: **#858** · **#850** · **#837** · **#825** · **#185** · **#870** · **#871** · **#866** ·
 > **#867** · **#891** (brainstorm first) · **#894** (satellite rig) · **#862** (`run-db-gated-tests.sh` with

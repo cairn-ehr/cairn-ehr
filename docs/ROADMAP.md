@@ -497,5 +497,10 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
 
 ## Parallel build-prep (not blocking the critical path)
 
+- **Synthetic cohort as a periodic test** (tracking [#1214](https://github.com/cairn-ehr/cairn-ehr/issues/1214)).
+  Step 1 built 2026-11-28: `scripts/import_synthetic_cohort.py` loads a SyntheticHealthData cohort's patients and
+  medicines through `cairn-node`'s verbs and counts what has no door. Next, in order: #1206 and #1207 (decisions),
+  #1208 (results), #1209 (problem list), #1210 (received documents); #1211, #1212, #1213 alongside.
+
 - **Bet B — Pi compute-cost run** — **PASS twice on Pi 5 / 8 GB**: 2026-06-25 ([PR #57](https://github.com/cairn-ehr/cairn-ehr/pull/57), caveated by a USB-2 dock + PG16) and the clean 2026-07-07 re-run on PG 18.4 + a PCIe NVMe HAT with **both caveats resolved** — B1 p95 3.99 ms @ 2,004,000 events, B2 p95 4.5 ms/374-note chart; B4 confirms ADR-0015's BLAKE3 blob-digest default (~4× SHA-256 on Cortex-A76). `cairn_pgx` is PG-18-capable (pgrx 0.18.1, [PR #56](https://github.com/cairn-ehr/cairn-ehr/pull/56)). **Only remaining follow-up:** fold the now un-caveated B4 number into the ADR-0015 follow-up to drop "provisional" from the blob-digest line.
 - **Spike 0003 — Postgres on Android** — **Ran 2026-06-25, G0–G3 PASS**: native PG 18.2 + a cross-built pgrx extension (incl. SPI) on a stock Android 16 phone; validates the fractal-topology invariant at the phone tier. Runnable kit at [`poc/pg-android-kit/`](../poc/pg-android-kit/). Remaining gaps (from-source PG build, APK packaging) are non-load-bearing. **Continued clinical case-mining** stays the highest-signal mode for stress-testing the primitives before product build.
