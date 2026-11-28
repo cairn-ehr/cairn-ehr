@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from cairn_matcher.orchestrator import DEFAULT_CONFIG, ComparatorConfig
 from cairn_matcher.pipeline.banding import DEFAULT_THRESHOLDS, Band, Thresholds
 from cairn_matcher.pipeline.runner import propose
+from cairn_matcher.pipeline.synthetic_line import both_synthetic
 from cairn_matcher.scoring import DEFAULT_WEIGHTS, Weights
 
 
@@ -58,6 +59,20 @@ class SweepResult:
                                                      # signal: stale rows actually cleared, #210)
     skipped_blocks: list[SkippedBlock] = field(default_factory=list)
     errors: list[SweepError] = field(default_factory=list)
+    # ADR-0115 decision 8. The three counts below are the part of `generated`,
+    # `auto_candidate` and `review` that is between two SYNTHETIC charts (a loaded training or
+    # test cohort). They are subsets, not additions. The sweep's yield is the matcher's
+    # miss-rate measure (ADR-0014), and a cohort built to contain duplicates would otherwise
+    # be read as duplicates among real patients. A pair with a chart of UNKNOWN kind is not
+    # counted here: it is not known to be synthetic.
+    synthetic_generated: int = 0
+    synthetic_auto_candidate: int = 0
+    synthetic_review: int = 0
+
+    def real_yield(self) -> int:
+        """Proposals written this sweep, leaving out those between two synthetic charts."""
+        return (self.auto_candidate + self.review
+                - self.synthetic_auto_candidate - self.synthetic_review)
 
 
 def sweep(
@@ -112,6 +127,9 @@ def sweep(
     # Pre-load the §5.4 trust states for the candidate set in the same ONE-query style;
     # propose() then reads trust from this map, not the DB (see the aliases preload above).
     trust = db.load_trust_for(conn, candidate_patients)
+    # Which candidates are of synthetic patients (ADR-0115), for the yield counts only: pair
+    # generation has already left out every pair across the line.
+    kinds = db.load_kinds_for(conn, candidate_patients)
     # Snapshot the proposal pairs still awaiting a human (AWAITING_HUMAN: pending or review;
     # issue #210) in the same read transaction, for the reconciliation pass after the main
     # loop. Such a row whose pair the blocking
@@ -127,6 +145,7 @@ def sweep(
 
     skipped_blocks = [SkippedBlock(*s) for s in skipped_raw]
     auto = review = below = 0
+    synthetic_auto = synthetic_review = 0
     errors: list[SweepError] = []
 
     def progressed() -> None:
@@ -145,10 +164,13 @@ def sweep(
             errors.append(SweepError((low, high), f"{type(exc).__name__}: {exc}"))
             continue
         progressed()
+        training_pair = both_synthetic(low, high, kinds)
         if result is Band.AUTO_CANDIDATE:
             auto += 1
+            synthetic_auto += training_pair
         elif result is Band.REVIEW:
             review += 1
+            synthetic_review += training_pair
         else:
             below += 1
 
@@ -198,4 +220,7 @@ def sweep(
         reconciled_retracted=reconciled_retracted,
         skipped_blocks=skipped_blocks,
         errors=errors,
+        synthetic_generated=sum(both_synthetic(low, high, kinds) for low, high in pairs),
+        synthetic_auto_candidate=synthetic_auto,
+        synthetic_review=synthetic_review,
     )

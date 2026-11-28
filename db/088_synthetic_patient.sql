@@ -9,6 +9,7 @@
 --   2. cairn_charts_straddle_synthetic_line(a, b)   -> boolean
 --   3. cairn_match_veto          (db/016), re-declared with one more row
 --   4. cairn_person_charts       (db/054), re-declared so a set never crosses the line
+--   5. match_proposal            (db/017), which never holds an open proposal across it
 --
 -- ONE HOME EACH. No door, view or Rust function reads `patient_registration.synthetic` for
 -- itself. Two spellings of "is this chart invented" is the mirror-list defect this repo keeps
@@ -135,5 +136,57 @@ AS $$
     ORDER BY 1
 $$;
 GRANT EXECUTE ON FUNCTION cairn_person_charts(uuid) TO cairn_agent;
+
+-- 5. The match worklist never holds an OPEN proposal across the line.
+--
+--    A proposal says "a human should decide whether these two charts are one person". For a
+--    pair across the line there is nothing to decide: db/018 refuses the link whoever signs
+--    it. So the proposal would be a worklist item that can only ever be dismissed, and one
+--    that puts an invented chart beside a real patient's on a clinician's screen.
+--
+--    The matcher leaves such pairs out for itself (matcher/.../pipeline/synthetic_line.py).
+--    This is the floor under it, for every OTHER writer: db/017 is a plain table with a GRANT,
+--    not a submit door, so a psql session or a third-party matcher writes it directly
+--    (principle 12: the floor holds against a client talking raw SQL).
+--
+--    A TRIGGER, not a CHECK constraint: the answer depends on another table
+--    (patient_registration), and a CHECK that reads another table is not re-evaluated when
+--    that table changes, and breaks dump/restore ordering.
+--
+--    WHAT IT ALLOWS, AND WHY IT IS NOT A FLAT REFUSAL. A proposal can be written while one
+--    chart's registration is still in transit (kind 'unknown', so the pair does not straddle)
+--    and turn out to cross the line when the registration arrives. That row must be able to
+--    LEAVE the worklist, so an UPDATE to one of the three closing statuses is admitted:
+--    'retracted' (the matcher's next check withdraws it), 'rejected' (a human dismisses it)
+--    and 'review' (auto_apply.rs finds the veto and stops). Every other status moves the pair
+--    toward a link, or back onto the worklist, and is refused. An INSERT is refused whatever
+--    status it carries: a new row across the line has no history to close.
+--
+--    `status` is deliberately unconstrained in db/017, so this is an allow-list of the closing
+--    statuses and not a deny-list of the advancing ones: a status added later is refused for
+--    such a pair until someone decides it is a closing one.
+CREATE OR REPLACE FUNCTION cairn_match_proposal_stays_on_one_side()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF NOT cairn_charts_straddle_synthetic_line(NEW.patient_low, NEW.patient_high) THEN
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'UPDATE' AND NEW.status IN ('retracted', 'rejected', 'review') THEN
+        RETURN NEW;
+    END IF;
+    RAISE EXCEPTION
+        'no match proposal between a synthetic patient''s chart and a real patient''s: % and % stand on opposite sides and can never be linked (ADR-0115). A row already here may only be closed: retracted, rejected or review',
+        NEW.patient_low, NEW.patient_high
+        USING ERRCODE = 'check_violation';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS match_proposal_stays_on_one_side ON match_proposal;
+CREATE TRIGGER match_proposal_stays_on_one_side
+    BEFORE INSERT OR UPDATE ON match_proposal
+    FOR EACH ROW EXECUTE FUNCTION cairn_match_proposal_stays_on_one_side();
 
 COMMIT;

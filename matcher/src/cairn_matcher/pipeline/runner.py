@@ -26,6 +26,7 @@ from cairn_matcher.pipeline.banding import (
 # canonical_pair moved to the pure blocking module (one definition of pair identity for
 # every pass shape); re-exported here because runner is its historical import path.
 from cairn_matcher.pipeline.blocking import canonical_pair
+from cairn_matcher.pipeline.synthetic_line import crosses_synthetic_line
 from cairn_matcher.scoring import DEFAULT_WEIGHTS, Weights, score
 
 __all__ = ["Assessment", "assess", "canonical_pair", "persist", "propose"]
@@ -88,6 +89,16 @@ def assess(
     comparisons = field_comparisons(rec_a, rec_b, config)
     match_score = score(comparisons, weights)
     vetoes = db.match_veto(conn, a, b)
+    if crosses_synthetic_line(vetoes):
+        # ADR-0115: one chart is of a synthetic patient and the other is not. The floor refuses
+        # that link whoever signs it (db/018), so a proposal would be a worklist item no human
+        # can act on. NOT a REVIEW, unlike every other hard veto: "a hard veto forces a human
+        # decision" (ADR-0014) presumes there is a decision to make, and here there is none.
+        # Returning the below-floor verdict means persist() also RETRACTS a proposal written
+        # while one chart's registration was still in transit and its kind unknown.
+        # Pair generation already leaves such pairs out; this is the one place every caller
+        # passes through, including a caller that names its own pairs.
+        return Assessment(*canonical_pair(a, b), None, None)
 
     # The alias/trust map keys AND the persisted alias/trust markers all use canonical
     # lowercase uuid text, whatever id type/casing the caller passed (uuid.UUID round-trip =

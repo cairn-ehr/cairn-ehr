@@ -12,6 +12,10 @@
 --
 -- Additive: no event-format change, no submit_event change. Reads nothing.
 --
+-- ONE RULE IS ENFORCED ON THIS TABLE ALL THE SAME, and it lives in db/088 (section 5): no open
+-- proposal between a synthetic patient's chart and a real patient's (ADR-0115). It is a
+-- trigger there, not here, because it calls a function that file defines.
+--
 -- WRITERS — five sites, two languages. The Python matcher INSERTs the proposal and retracts
 -- it (pipeline/db.py upsert_proposal / retract_pending_proposal), as a role granted
 -- cairn_agent by the GRANT at the foot of this file. The Rust apply seams then move

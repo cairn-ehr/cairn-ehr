@@ -51,6 +51,7 @@ def _install_db_stub(monkeypatch) -> dict:
     stub.match_veto = lambda conn, a, b: []
     stub.load_aliases = lambda conn, pid: frozenset()
     stub.load_trust_for = lambda conn, ids: {}
+    stub.load_kinds_for = lambda conn, ids: {}  # ADR-0115: every chart of unknown kind
     stub.retract_awaiting_proposal = lambda conn, low, high: False
     stub.upsert_proposal = lambda conn, low, high, payload: captured.update(payload=payload)
 
