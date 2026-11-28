@@ -3,7 +3,7 @@
 
 SyntheticHealthData (a sibling project) writes an invented general-practice cohort as one
 SQLite file, `cohort.sqlite`. This script reads that file and writes what Cairn has a door
-for TODAY — patients and their medicines — by running `cairn-node` verbs, exactly as an
+for TODAY — patients, their sex and address, and their medicines — by running `cairn-node` verbs, exactly as an
 operator at a terminal would. It then reports what it had to leave behind and why, so every
 run restates how much of a realistic record Cairn can hold.
 
@@ -30,8 +30,8 @@ measured cost of having no bulk door (#1212).
   for a patient, a person is meant to look at them. By default the patient is HELD and
   counted. `--register-past-candidates` registers anyway; the registration then attests a
   list that no human read, which is acceptable on a test node and nowhere else.
-* **Invent a door.** Sex, address, conditions, results, imaging reports and letters have no
-  door or no stream (#1208 to #1213). They are counted and left in the file.
+* **Invent a door.** Conditions, results, notes, imaging reports and letters have no door
+  or no stream (#1208 to #1213). They are counted and left in the file.
 
 # Running it twice
 
@@ -100,6 +100,9 @@ CAIRN_SYSTEMS = {IHI_URI: "ihi-au", MEDICARE_URI: "medicare-au"}
 MRN_SYSTEM_PREFIX = "mrn-shd-"
 
 DRUGREF_MOIETY = "drugref-moiety"
+# The demographic fields this script writes after registration, as Cairn names them.
+SEX_FIELD = "administrative-sex"
+ADDRESS_FIELD = "address"
 
 
 class CohortRefused(Exception):
@@ -124,6 +127,10 @@ class Patient:
     identifiers: tuple[tuple[str, str], ...]
     """(system as the cohort names it, value), in the cohort's order."""
     medicines: tuple[Medicine, ...]
+    sex: str | None = None
+    """As the cohort words it ("female", "male"); recorded as given, never mapped."""
+    address: str | None = None
+    """The whole address as one line; Cairn has no structured address profile yet."""
 
 
 @dataclass(frozen=True)
@@ -150,6 +157,19 @@ def cohort_tag(spec: dict) -> str:
 
 def mrn_system(spec: dict) -> str:
     return MRN_SYSTEM_PREFIX + cohort_tag(spec)
+
+
+def address_line(street: str | None, suburb: str | None, state: str | None,
+                 postcode: str | None) -> str | None:
+    """An Australian address as one readable line, or None if the cohort gives no part of it.
+
+    "197 Kurrajong Place, SOLDIERS HILL VIC 3350": the street, then the locality line as an
+    envelope carries it. Missing parts are left out, never padded: a line with a made-up
+    postcode would be a precise untruth.
+    """
+    locality = " ".join(part.strip() for part in (suburb, state, postcode) if part and part.strip())
+    parts = [part for part in ((street or "").strip(), locality) if part]
+    return ", ".join(parts) or None
 
 
 def _count(db: sqlite3.Connection, sql: str) -> int:
@@ -208,14 +228,15 @@ def read_cohort(path: Path) -> Cohort:
                 birth_date=birth_date,
                 identifiers=tuple(identifiers.get(pid, ())),
                 medicines=tuple(medicines.get(pid, ())),
+                sex=sex or None,
+                address=address_line(street, suburb, state, postcode),
             )
-            for pid, given, family, birth_date in db.execute(
-                "SELECT id, given, family, birth_date FROM patient ORDER BY id"
+            for pid, given, family, birth_date, sex, street, suburb, state, postcode in db.execute(
+                "SELECT id, given, family, birth_date, sex, street, suburb, state, postcode "
+                "FROM patient ORDER BY id"
             )
         )
         left_behind = {
-            "sex": len(patients),
-            "address": len(patients),
             "conditions": _count(db, "SELECT count(*) FROM condition"),
             "pathology results": _count(db, "SELECT count(*) FROM result"),
             "progress notes": _count(
@@ -237,8 +258,6 @@ def read_cohort(path: Path) -> Cohort:
 # Why each kind is left behind, and the issue that tracks the missing door. Printed with the
 # counts so the report explains itself to someone who has not read this file.
 WHY_LEFT_BEHIND = {
-    "sex": "no door records a stated sex (#1211)",
-    "address": "no door records an address (#1211)",
     "conditions": "no problem-list stream (#1209)",
     "pathology results": "no results stream (#1208)",
     "progress notes": "notes are written only from the window (#1212)",
@@ -338,6 +357,21 @@ def medication_argv(chart: str, medicine: Medicine) -> list[str]:
     return argv
 
 
+def demographics_argv(chart: str, patient: Patient, have: frozenset[str]) -> list[str] | None:
+    """Record the patient's sex and address, leaving out any the chart already has.
+
+    Returns None when there is nothing to record. The provenance is `imported`: these were
+    read from another record, and what the patient would say today is not known. Cairn
+    ranks that below anything a patient or a document states later, which is the point.
+    """
+    argv = ["patient-demographics", chart, "--provenance", "imported"]
+    if patient.sex and SEX_FIELD not in have:
+        argv += ["--administrative-sex", patient.sex]
+    if patient.address and ADDRESS_FIELD not in have:
+        argv += ["--address", patient.address, "--address-use", "residential"]
+    return argv if len(argv) > 4 else None
+
+
 def cease_argv(chart: str, thread: str, medicine: Medicine) -> list[str]:
     assert medicine.stopped is not None
     return [
@@ -398,6 +432,15 @@ class Completed:
 Run = Callable[[list[str]], Completed]
 """Runs one `cairn-node` verb. Injected, so the run is tested against a stand-in node."""
 
+Have = Callable[[str], frozenset[str]]
+"""Which of SEX_FIELD and ADDRESS_FIELD a chart already carries. Injected for the same
+reason. Asked only about a chart that existed before this run: no `cairn-node` verb prints a
+chart's demographics, so the real one reads the projections."""
+
+
+def nothing_yet(chart: str) -> frozenset[str]:
+    return frozenset()
+
 
 @dataclass
 class Report:
@@ -412,6 +455,9 @@ class Report:
     medicines_ceased: int = 0
     medicines_failed: int = 0
     medicines_coded: int = 0
+    demographics_recorded: int = 0
+    demographics_already_present: int = 0
+    demographics_failed: int = 0
     register_seconds: float = 0.0
     medicine_seconds: float = 0.0
     held: list[dict] = field(default_factory=list)
@@ -420,7 +466,12 @@ class Report:
     newer_format: bool = False
 
     def incomplete(self) -> bool:
-        return bool(self.patients_held or self.patients_failed or self.medicines_failed)
+        return bool(
+            self.patients_held
+            or self.patients_failed
+            or self.medicines_failed
+            or self.demographics_failed
+        )
 
 
 def _refusal(stderr: str) -> str:
@@ -531,14 +582,38 @@ def _medicines(patient: Patient, chart: str, existed: bool, run: Run, report: Re
                 )
 
 
+def _demographics(
+    patient: Patient, chart: str, existed: bool, run: Run, have: Have, report: Report
+) -> None:
+    """Record sex and address unless an earlier run did. One count per patient, not per
+    field: both go in one command and land together or not at all."""
+    if not (patient.sex or patient.address):
+        return
+    argv = demographics_argv(chart, patient, have(chart) if existed else frozenset())
+    if argv is None:
+        report.demographics_already_present += 1
+        return
+    done = run(argv)
+    if done.returncode == 0:
+        report.demographics_recorded += 1
+    else:
+        report.demographics_failed += 1
+        report.failures.append(
+            {"patient": patient.mrn, "step": "demographics", "why": _refusal(done.stderr)}
+        )
+
+
 @dataclass(frozen=True)
 class Options:
     register_past_candidates: bool = False
     limit: int | None = None
 
 
-def import_cohort(cohort: Cohort, run: Run, opts: Options | None = None) -> Report:
-    """Write every patient and medicine that has a door, and account for the rest."""
+def import_cohort(
+    cohort: Cohort, run: Run, opts: Options | None = None, have: Have = nothing_yet
+) -> Report:
+    """Write every patient, their sex and address, and their medicines, and account for
+    the rest."""
     opts = opts or Options()
     system_for_mrn = mrn_system(cohort.spec)
     report = Report(
@@ -559,6 +634,7 @@ def import_cohort(cohort: Cohort, run: Run, opts: Options | None = None) -> Repo
     for patient in patients:
         chart, existed = _chart_for(patient, system_for_mrn, run, opts, report)
         if chart is not None:
+            _demographics(patient, chart, existed, run, have, report)
             _medicines(patient, chart, existed, run, report)
     return report
 
@@ -597,6 +673,34 @@ def foreign_chart_count(conn: str) -> int:
     return int(out.stdout.strip())
 
 
+def chart_fields_reader(conn: str) -> Have:
+    """Read which of sex and address a chart already carries, from the two projections that
+    hold them (`patient_demographic`, `patient_address`). The chart id is checked to be a
+    uuid before it goes anywhere near SQL: it was parsed out of a program's output."""
+
+    def have(chart: str) -> frozenset[str]:
+        if not _UUID_ONLY.match(chart):
+            raise ValueError(f"not a chart id: {chart!r}")
+        sql = (
+            f"SELECT '{SEX_FIELD}' WHERE EXISTS (SELECT 1 FROM patient_demographic "
+            f"WHERE patient_id = '{chart}' AND field = '{SEX_FIELD}') "
+            f"UNION ALL SELECT '{ADDRESS_FIELD}' WHERE EXISTS (SELECT 1 FROM patient_address "
+            f"WHERE patient_id = '{chart}')"
+        )
+        out = subprocess.run(
+            ["psql", conn, "-X", "-At", "-v", "ON_ERROR_STOP=1", "-c", sql],
+            capture_output=True, text=True, check=False,
+        )
+        if out.returncode != 0:
+            # Not knowing is answered as "has neither": the fact is then recorded again,
+            # which adds an identical assertion and changes nothing a reader sees. The
+            # other answer would silently leave a chart without its address.
+            return frozenset()
+        return frozenset(out.stdout.split())
+
+    return have
+
+
 def node_runner(cairn_node: str, key: str, conn: str) -> Run:
     """Run real `cairn-node` verbs. The connection string goes in the environment, never on
     the command line, because it can carry a password and a command line is world-readable."""
@@ -624,6 +728,8 @@ def report_lines(report: Report, patients_in_file: int) -> list[str]:
         f"medicines  recorded {report.medicines_recorded} ({report.medicines_coded} coded), "
         f"already present {report.medicines_already_present}, ceased "
         f"{report.medicines_ceased}, failed {report.medicines_failed}",
+        f"sex and address  recorded {report.demographics_recorded}, already present "
+        f"{report.demographics_already_present}, failed {report.demographics_failed}",
     ]
     if report.patients_registered:
         each = report.register_seconds / report.patients_registered
@@ -693,7 +799,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     run = node_runner(args.cairn_node, args.key, args.conn)
     report = import_cohort(
-        cohort, run, Options(args.register_past_candidates, args.limit)
+        cohort,
+        run,
+        Options(args.register_past_candidates, args.limit),
+        chart_fields_reader(args.conn),
     )
     print("\n".join(report_lines(report, len(cohort.patients))))
     if args.report:

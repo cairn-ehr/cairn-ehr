@@ -736,6 +736,8 @@ const MARKED_COMMIT_SITES: &[&str] = &[
     "crates/cairn-node/src/identify.rs",
     "crates/cairn-node/src/john_doe.rs",
     "crates/cairn-node/src/evidence.rs",
+    // demographic.rs: assert_demographics submits one event per fact in one transaction (#1211).
+    "crates/cairn-node/src/patient/demographic.rs",
     "crates/cairn-node/src/photo_evidence.rs",
     "crates/cairn-node/src/apply_proposal.rs",
     "crates/cairn-node/src/auto_apply.rs",

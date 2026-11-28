@@ -1988,6 +1988,45 @@ enum Cmd {
         confirm_new: bool,
     },
 
+    /// Record demographics a registration does not: the patient's sex, gender, address, or a
+    /// further name with its use (#1211). Each fact is one additive event on an EXISTING
+    /// chart; nothing is edited, so a new address or a corrected sex is simply recorded again
+    /// and the chart shows the one that stands.
+    ///
+    /// Everything is recorded as typed. Sex and gender are open text (intersex, unknown and
+    /// declined are all recordable), and an address is one readable line.
+    PatientDemographics {
+        /// The chart to record on (printed by `patient-register` and `patient-search`).
+        patient: Uuid,
+        /// Where these facts came from: patient-stated, document-verified,
+        /// third-party-stated, clinician-observed, imported or unknown. Required, because
+        /// no default is honest for every caller. A stronger source is not displaced by a
+        /// weaker one recorded later.
+        #[arg(long)]
+        provenance: String,
+        /// A further name, recorded verbatim.
+        #[arg(long)]
+        name: Option<String>,
+        /// What --name is used for (legal, maiden, alias, preferred, …).
+        #[arg(long)]
+        name_use: Option<String>,
+        /// The sex on documents and forms.
+        #[arg(long)]
+        administrative_sex: Option<String>,
+        /// The sex recorded at birth.
+        #[arg(long)]
+        sex_at_birth: Option<String>,
+        /// The gender the patient states.
+        #[arg(long)]
+        gender_identity: Option<String>,
+        /// The whole address as one line, e.g. "197 Kurrajong Place, SOLDIERS HILL VIC 3350".
+        #[arg(long)]
+        address: Option<String>,
+        /// What --address is used for (residential, postal, work, …).
+        #[arg(long)]
+        address_use: Option<String>,
+    },
+
     /// Assert a §5.9 confidentiality grade over an event, a medication thread, or a whole
     /// chart (`sensitivity.grade.asserted`). Raising is deliberately cheap for an event or a
     /// thread — no rationale required. A whole-chart grade DOES require `--rationale`: it
@@ -4749,6 +4788,53 @@ async fn run() -> anyhow::Result<()> {
                     recorded.value,
                     recorded.event_id
                 )
+            );
+        }
+        Cmd::PatientDemographics {
+            patient,
+            provenance,
+            name,
+            name_use,
+            administrative_sex,
+            sex_at_birth,
+            gender_identity,
+            address,
+            address_use,
+        } => {
+            use cairn_node::patient::demographic;
+            // Everything that can be refused without a database is refused first, so a slip
+            // on the command line costs no key prompt and no connection.
+            let facts = demographic::facts_from(demographic::Stated {
+                name,
+                name_use,
+                administrative_sex,
+                sex_at_birth,
+                gender_identity,
+                address,
+                address_use,
+            })
+            .map_err(anyhow::Error::msg)?;
+            if let Some(why) = demographic::refusal(&facts, &provenance) {
+                anyhow::bail!(why);
+            }
+            let sk = load_signing_key(&cli.key, true)?; // interactive: may prompt to unseal
+            let kid = hex::encode(sk.verifying_key().to_bytes());
+            let mut db = cairn_node::db::connect(&cli.conn).await?;
+            let id = cairn_node::identity::load_local(&db).await?;
+            cairn_node::actor_enrolment::require_device_actor(&db, &kid).await?;
+            let event_ids = demographic::assert_demographics(
+                &mut db,
+                &sk,
+                &kid,
+                &id.node_id_hex,
+                patient,
+                &facts,
+                &provenance,
+            )
+            .await?;
+            println!(
+                "{}",
+                demographic::recorded_lines(patient, &facts, &event_ids)
             );
         }
         Cmd::SensitivityAssert {
