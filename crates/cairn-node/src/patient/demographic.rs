@@ -436,18 +436,27 @@ mod tests {
     fn the_success_lines_name_each_fact_and_its_event() {
         let (p, a, b) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
         let facts = [
-            sex("F"),
+            sex("intersex"),
             DemographicFact::Address {
-                display: "x".into(),
-                use_: None,
+                display: "197 Kurrajong Place".into(),
+                use_: Some("residential".into()),
             },
         ];
+        let lines = recorded_lines(p, &facts, &[a, b]);
         assert_eq!(
-            recorded_lines(p, &facts, &[a, b]),
+            lines,
             format!(
                 "recorded administrative sex for {p}; event {a}\n\
                  recorded address for {p}; event {b}"
             )
         );
+        // What was typed never reaches a terminal or a log: only the kind of fact and two
+        // record ids do. The CodeQL barrier row for this function rests on exactly this.
+        for typed in ["intersex", "Kurrajong", "residential"] {
+            assert!(
+                !lines.contains(typed),
+                "{typed} leaked into the success lines"
+            );
+        }
     }
 }

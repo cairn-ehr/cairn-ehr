@@ -116,6 +116,16 @@ extensions:
       # (the `patient-register` success line)
       - ["cairn_node::patient::register::registered_patient_lines", "ReturnValue", "log-injection", "manual"]
 
+      # Returns String: one "recorded <kind> for <chart id>; event <event id>" line per fact — a
+      # fixed label ("address", "administrative sex", …) and two random v7 record identifiers,
+      # printed ON PURPOSE (#826) as every evidence verb prints them. The facts are an input, and
+      # only each fact's `label()` reaches the return: the address, the sex and the name typed on
+      # the command line never do, which its unit test
+      # `the_success_lines_name_each_fact_and_its_event` pins by asserting their absence. Flagged
+      # for its parameter's name, as `registered_patient_lines` above was: "writes patient_id to a
+      # log file". (the `patient-demographics` success lines, #1211)
+      - ["cairn_node::patient::demographic::recorded_lines", "ReturnValue", "log-injection", "manual"]
+
       # Return Strings: the `medication-list` "W"/"ceased:" lines and the `medication-withhold` /
       # `medication-release` success lines (#803) — clinician-typed hold reasons and random v7
       # record ids the CLI prints ON PURPOSE; the two-id builders are flagged for their
