@@ -97,7 +97,7 @@ door-surface guard sees only EXECUTE and SELECT, which is how C2 passed every gu
 **#905 is far wider than filed.** About 27 files, roughly 200 window tests, never run in CI. The issue has
 been widened and the workflow comment corrected. #963 was widened to cover medication draft lists.
 
-Fixed in this review's PR (#1205), all documentation:
+Fixed in this review's PR (#1242), all documentation:
 
 - `security.md` §7.5 said the window holds the node key. ADR-0109 retired that.
 - The ADR index lacked six partial supersessions and amendments:
