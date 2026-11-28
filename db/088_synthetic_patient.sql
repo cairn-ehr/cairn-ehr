@@ -183,6 +183,12 @@ BEGIN
 END;
 $$;
 
+-- Not a door: nobody calls a trigger function, the table fires it. Revoked from PUBLIC so it is
+-- not on the window's reachable surface (db/window_door_surface.txt), as db/056 does for its
+-- own. The trigger still fires for every writer: EXECUTE on a trigger function is checked when
+-- the trigger is created, not when it fires.
+REVOKE EXECUTE ON FUNCTION cairn_match_proposal_stays_on_one_side() FROM PUBLIC;
+
 DROP TRIGGER IF EXISTS match_proposal_stays_on_one_side ON match_proposal;
 CREATE TRIGGER match_proposal_stays_on_one_side
     BEFORE INSERT OR UPDATE ON match_proposal
