@@ -534,7 +534,9 @@ async fn a_proposal_found_to_cross_the_line_can_be_closed_and_never_advanced() {
     }
     for closing in ["review", "rejected", "retracted"] {
         assert_eq!(
-            set_proposal_status(&c, late, person, closing).await.unwrap(),
+            set_proposal_status(&c, late, person, closing)
+                .await
+                .unwrap(),
             1,
             "{closing} must stay possible, or a stale row could never leave the worklist"
         );
