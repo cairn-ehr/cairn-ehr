@@ -68,7 +68,7 @@ const UNKNOWN_KIND_PREFIX: &str = "[unregistered here] ";
 /// (the plain name, or one already marked as linked or in doubt). **Pure.**
 ///
 /// The kind leads EVERY other prefix, so that after ellipsizing it is the part that
-/// survives: "[SYNTHETIC] ↳ linked: Jo…" still says the one thing that must be read.
+/// survives: `[SYNTHETIC] ↳ linked: Jo…` still says the one thing that must be read.
 pub fn name_with_kind(kind: PatientKind, name: &str) -> String {
     match kind {
         PatientKind::Synthetic => format!("{SYNTHETIC_PREFIX}{name}"),
