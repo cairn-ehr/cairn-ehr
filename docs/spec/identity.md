@@ -46,6 +46,8 @@ A non-standard registration states its **basis** (the value-open reason the clas
 does not, because there the class *is* the explanation and a mandatory free-text box would be a required
 field satisfiable only by fabrication (principle 4).
 
+**A registration may state that the patient is synthetic** ([ADR-0115](decisions/0115-a-patient-is-marked-synthetic-at-registration.md); decided, the build is owed, #1219). It is a fact of its own and not a fourth class: the classes say how much is known about who the patient is, and an invented patient may be of any of them. The mark is fixed for the chart's life, and everything filed under the chart is synthetic by derivation, so no clinical event carries a mark and a synthetic chart replicates like any other. The floor **refuses** a link between a synthetic chart and one that is not (a refusal, not the [§5.2](#52-matching-pipeline-safety-asymmetric-false-merge-worse-than-false-split) veto that forces a human decision), and the matcher never proposes one; two synthetic charts may be linked. A wrong mark is repaired by registering a correct chart and reattributing ([§5.5](#55-reattribution-one-primitive-tiered-workflows)), never by changing the mark. It is shown on the chart and on every row that names the patient, and any count of patients says whether it includes them. **Not guaranteed:** a node on an older build shows a synthetic chart as a real one, and until reattribution is built a wrong mark cannot be repaired.
+
 Registrations created during a partition are tagged and go to the **head of the upstream matching queue on reconnect** — post-partition reconciliation is a scheduled pipeline stage, not an error state.
 
 ## 5.4 Unidentified registration (John Doe) — baked into the root

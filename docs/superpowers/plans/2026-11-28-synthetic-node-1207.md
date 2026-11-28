@@ -16,6 +16,13 @@ medium under its own container magic. Nothing on the clinical plane changes: an 
 **Tech stack:** PostgreSQL 18 SQL (db/088 new; db/007 and db/009 in place, as ADR-0080 allows), Rust
 (`cairn-event`, `cairn-node`, `cairn-medium`, `cairn-sync`, `cairn-gui`), Python (the cohort importer).
 
+> [!CAUTION]
+> **WITHDRAWN 2026-11-28. Never executed; kept as a record.** Its Task 0 tested the plan's first claim and found
+> it false: `cairn-sync serve` ships clinical-plane events to a puller it never admitted (#1220). The maintainer
+> then ruled that nodes are not marked at all and the patient is
+> ([ADR-0115](../../spec/decisions/0115-a-patient-is-marked-synthetic-at-registration.md), which supersedes
+> ADR-0114). Nothing below is to be built.
+
 > [!WARNING]
 > **Written from reading the code, not from running it.** Three claims this plan rests on were read and
 > not yet tested. Task 0 tests them before anything is built, and the plan changes if one is false:

@@ -499,7 +499,8 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
 
 - **Synthetic cohort as a periodic test** (tracking [#1214](https://github.com/cairn-ehr/cairn-ehr/issues/1214)).
   Step 1 built 2026-11-28: `scripts/import_synthetic_cohort.py` loads a SyntheticHealthData cohort's patients and
-  medicines through `cairn-node`'s verbs and counts what has no door. Next, in order: #1206 and #1207 (decisions),
+  medicines through `cairn-node`'s verbs and counts what has no door. Next, in order: #1206 (a decision) and #1219 (a synthetic PATIENT is marked at registration, ADR-0115, decided
+  and not built; the node-level #1207 / ADR-0114 was withdrawn),
   #1208 (results), #1209 (problem list), #1210 (received documents); #1211, #1212, #1213 alongside.
   #1211 slice 1 built the same day: `cairn-node patient-demographics` (sex, gender, address line, name use) and
   the importer's use of it. #1217 fixed (a database that is not UTF8 is refused before any migration).
