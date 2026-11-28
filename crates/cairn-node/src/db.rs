@@ -1039,6 +1039,33 @@ pub async fn read_schema_stamp(client: &Client) -> anyhow::Result<Option<SchemaS
     Ok(stamp)
 }
 
+/// Why a database in `server_encoding` cannot hold a Cairn record, or `None` if it can.
+/// **Pure.**
+///
+/// Cairn stores names, addresses and notes as text and its migrations are written in UTF-8.
+/// A database created under a `C` locale gets the `SQL_ASCII` encoding, which performs no
+/// conversion and no validation: the first migration with a non-ASCII character fails with
+/// `conversion between UTF8 and SQL_ASCII is not supported`, naming `005_submit` and nothing
+/// an operator can act on. Worse would be an encoding that DID load (LATIN1, say): a name
+/// outside it could then not be stored at all, at a registration desk, months later. So the
+/// refusal is made here, before any file is replayed, and says what to do.
+///
+/// The comparison ignores case because `SHOW server_encoding` reports `UTF8` while
+/// `createdb -E` accepts `utf8`, `UTF-8` and `Unicode`; only the server's own spelling
+/// reaches this function, and being strict about its case would buy nothing.
+pub fn encoding_refusal(server_encoding: &str) -> Option<String> {
+    if server_encoding.eq_ignore_ascii_case("UTF8") {
+        return None;
+    }
+    Some(format!(
+        "refusing to load the schema: this database's encoding is {server_encoding}, and Cairn \
+         needs UTF8 (names, addresses and notes are text in any script). An encoding is fixed \
+         when a database is created, so create a new one: \
+         `createdb -E UTF8 --locale=C.UTF-8 -T template0 <name>` (or `initdb -E UTF8 \
+         --locale=C.UTF-8` for a new cluster), then run this command against it."
+    ))
+}
+
 /// Connect and replay every embedded migration — guarded against DOWNGRADE (#188), and
 /// SKIPPED when nothing changed (#726).
 ///
@@ -1078,6 +1105,18 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
         .map_err(|e| anyhow::anyhow!("acquiring schema load-lock: {}", legible_db_error(&e)))?;
     // #909 C1: time out lock waits only NOW — the advisory wait above stays blocking.
     crate::replay_wait::arm(&client).await?;
+    // Before any file is replayed: a database that cannot hold UTF-8 text is refused with a
+    // remedy, instead of failing inside whichever migration first contains a non-ASCII
+    // character (#1217). Asked on every connect, not only on a replay: it is one cheap
+    // statement, and a database of the wrong encoding is wrong whether or not it is stamped.
+    let server_encoding: String = client
+        .query_one("SHOW server_encoding", &[])
+        .await
+        .map_err(|e| anyhow::anyhow!("reading the server encoding: {}", legible_db_error(&e)))?
+        .get(0);
+    if let Some(refusal) = encoding_refusal(&server_encoding) {
+        anyhow::bail!(refusal);
+    }
     let stamp = read_schema_stamp(&client).await?;
     let recorded: Option<i32> = stamp.as_ref().map(|s| s.version);
     if let Some(recorded) = recorded {
@@ -1309,6 +1348,25 @@ pub async fn test_serial_guard(conn: &str) -> anyhow::Result<Client> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1217: only UTF8 holds a Cairn record, and the refusal must tell an operator what to
+    /// do, because the encoding cannot be changed on an existing database.
+    #[test]
+    fn only_a_utf8_database_is_accepted_and_the_refusal_names_the_remedy() {
+        assert_eq!(encoding_refusal("UTF8"), None);
+        assert_eq!(encoding_refusal("utf8"), None);
+        for other in ["SQL_ASCII", "LATIN1", "WIN1252", ""] {
+            let refusal = encoding_refusal(other).expect("a non-UTF8 encoding is refused");
+            assert!(
+                refusal.contains(other),
+                "names the encoding found: {refusal}"
+            );
+            assert!(
+                refusal.contains("createdb -E UTF8"),
+                "names the remedy: {refusal}"
+            );
+        }
+    }
 
     /// `cairn-db-keepalive`'s tests pin the settings, not that anyone applies them: a client's
     /// socket options cannot be read back from outside. So pin this call site by source (#875).

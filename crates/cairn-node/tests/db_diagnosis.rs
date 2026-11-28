@@ -91,6 +91,72 @@ async fn a_server_error_carries_message_sqlstate_and_detail() {
 /// synthetic on purpose: forcing a genuine failure inside a real migration would mean
 /// planting a decoy object in a shared test database, which is both destructive and
 /// coupled to whichever migration happened to trip over it.
+/// #1217 — a database that cannot hold UTF-8 is refused BEFORE any migration is replayed,
+/// with the remedy, rather than failing inside `005_submit` with
+/// `conversion between UTF8 and SQL_ASCII is not supported`.
+///
+/// It makes its own throwaway database, because an encoding is fixed at creation: `SQL_ASCII`
+/// is what `initdb` gives under a `C` locale, which is how the defect was met. `template0` is
+/// required (a template of another encoding cannot be copied), and no extension is installed
+/// in it on purpose: the refusal must come first, before anything needs `cairn_pgx`.
+#[tokio::test]
+async fn a_database_that_is_not_utf8_is_refused_before_any_migration() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    // Keyword-form only, as the connect tests below: swap the database name in place.
+    if !base.contains("dbname=") {
+        eprintln!("skipped: CAIRN_TEST_PG is not in keyword form");
+        return;
+    }
+    let name = format!("cairn_ascii_{}", std::process::id());
+    let ascii: String = base
+        .split_whitespace()
+        .map(|kv| {
+            if kv.starts_with("dbname=") {
+                format!("dbname={name}")
+            } else {
+                kv.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let admin = db::connect(&base).await.unwrap();
+    admin
+        .batch_execute(&format!(
+            "CREATE DATABASE {name} ENCODING 'SQL_ASCII' LC_COLLATE 'C' LC_CTYPE 'C' \
+             TEMPLATE template0"
+        ))
+        .await
+        .unwrap();
+
+    let outcome = db::connect_and_load_schema(&ascii).await;
+    // Drop BEFORE asserting, so a failed assertion does not leave the database behind. The
+    // loader's own connection is gone by now: it is dropped with the error it returned.
+    let rendered = match outcome {
+        Ok(_) => String::from("(the schema loaded)"),
+        Err(e) => format!("{e:#}"),
+    };
+    admin
+        .batch_execute(&format!("DROP DATABASE {name} WITH (FORCE)"))
+        .await
+        .unwrap();
+
+    assert!(
+        rendered.contains("SQL_ASCII"),
+        "names the encoding found: {rendered}"
+    );
+    assert!(
+        rendered.contains("createdb -E UTF8"),
+        "names the remedy: {rendered}"
+    );
+    assert!(
+        !rendered.contains("loading 0"),
+        "refused before any migration ran: {rendered}"
+    );
+}
+
 #[tokio::test]
 async fn a_failed_migration_names_the_migration_the_message_and_the_sqlstate() {
     let Some(base) = cs() else {
