@@ -1,6 +1,6 @@
 # ADR-0114 — A node says at genesis that its data is invented
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0115](0115-a-patient-is-marked-synthetic-at-registration.md) (wholly; never built)
 - **Date:** 2026-11-28
 - **Spec version at acceptance:** 0.116
 - **Refines:** [ADR-0017](0017-federation-admission-sovereignty-peering-and-trust-anchors.md) (one more

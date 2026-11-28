@@ -243,6 +243,7 @@ nav:
       - ADR-0112 · A terminal follows its node: spec/decisions/0112-a-terminal-follows-its-node.md
       - ADR-0113 · How an identifier's system is spelled: spec/decisions/0113-identifier-system-spelling.md
       - ADR-0114 · A node says at genesis that its data is invented: spec/decisions/0114-a-node-says-at-genesis-that-its-data-is-invented.md
+      - ADR-0115 · A patient is marked synthetic at registration: spec/decisions/0115-a-patient-is-marked-synthetic-at-registration.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

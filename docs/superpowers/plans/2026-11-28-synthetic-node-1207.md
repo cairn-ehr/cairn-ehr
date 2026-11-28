@@ -17,11 +17,11 @@ medium under its own container magic. Nothing on the clinical plane changes: an 
 (`cairn-event`, `cairn-node`, `cairn-medium`, `cairn-sync`, `cairn-gui`), Python (the cohort importer).
 
 > [!CAUTION]
-> **STOPPED at Task 0 (2026-11-28, #1220). Do not execute this plan as written.** Claim 1 below is FALSE for the
-> clinical plane: `cairn-sync serve` ships events to a puller it never admitted and withholds only custody, which
-> is deliberate and pinned by `an_unadmitted_puller_replicates_events_but_gains_no_custody`. The table's edge rows
-> and Task 3's matrix (notably "real, field unknown / synthetic: its pull fails") assume otherwise. ADR-0114 needs a
-> correcting ADR first; this plan is rewritten after it.
+> **WITHDRAWN 2026-11-28. Never executed; kept as a record.** Its Task 0 tested the plan's first claim and found
+> it false: `cairn-sync serve` ships clinical-plane events to a puller it never admitted (#1220). The maintainer
+> then ruled that nodes are not marked at all and the patient is
+> ([ADR-0115](../../spec/decisions/0115-a-patient-is-marked-synthetic-at-registration.md), which supersedes
+> ADR-0114). Nothing below is to be built.
 
 > [!WARNING]
 > **Written from reading the code, not from running it.** Three claims this plan rests on were read and
