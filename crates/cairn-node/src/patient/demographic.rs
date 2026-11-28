@@ -361,7 +361,13 @@ mod tests {
             assert_eq!(body.payload["field"], field);
             assert_eq!(body.payload["value"], fact.text(), "recorded as given");
             let twin = body.plaintext_twin.expect("every event is legible");
-            assert!(twin.contains(fact.text()), "{twin}");
+            // The message is fixed text on purpose. Printing the twin here would write a sex or
+            // a gender to the test log; CodeQL's cleartext-logging query said so (alert #101),
+            // and although these values are invented, a test should not model the habit.
+            assert!(
+                twin.contains(fact.text()),
+                "the twin must carry the value exactly as it was given"
+            );
         }
     }
 
