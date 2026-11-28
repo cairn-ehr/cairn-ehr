@@ -172,7 +172,10 @@
 > window SHOWS the mark yet. **`patient-search` and `patient-register` do** (2026-11-28, third PR of the
 > day): a search candidate carries `kind` (`synthetic` / `real` / `unknown`, default `unknown` so an older build's
 > candidate is never read as real), and the CLI's row leads its name cell with `[SYNTHETIC]` or `[unregistered here]`.
-> Other CLI lists (`medication-list`, `patient-sensitivity`, `patient-safety`, the duplicate worklist) do not.
+> The one-patient commands (`medication-list`, `patient-sensitivity`, `patient-safety`, `duplicate-check
+> --patient`) print one line first, `SYNTHETIC patient: not a real person.`, or `Registration not received here: …`
+> for a chart of unknown kind, and nothing for a real chart (`patient/kind.rs`, one reader and one wording).
+> **Gap:** `medication-list --json` says it on stderr only; it is not in the JSON.
 > The #1207 plan is withdrawn (its file says so).
 
 > [!NOTE]

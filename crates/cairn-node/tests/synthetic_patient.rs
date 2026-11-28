@@ -336,6 +336,33 @@ async fn a_reprojection_rebuilds_the_mark_from_the_log() {
     assert_eq!(chart_synthetic(&c, invented).await, "synthetic");
 }
 
+/// What the one-patient commands print first (`medication-list`, `patient-sensitivity`,
+/// `patient-safety`, `duplicate-check`): they read the kind through `patient::kind`, and a
+/// real chart gets no line at all.
+#[tokio::test]
+async fn the_one_patient_commands_read_the_kind_and_banner_all_but_a_real_chart() {
+    use cairn_node::patient::kind::{chart_kind, kind_banner};
+    use cairn_patient_search::PatientKind;
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = open(&base).await;
+    let (sk, kid, _, _) = setup(&c).await;
+    let invented = register(&c, &sk, &kid, true).await;
+    let person = register(&c, &sk, &kid, false).await;
+
+    assert_eq!(
+        chart_kind(&c, invented).await.unwrap(),
+        PatientKind::Synthetic
+    );
+    assert_eq!(chart_kind(&c, person).await.unwrap(), PatientKind::Real);
+    let stranger = chart_kind(&c, Uuid::now_v7()).await.unwrap();
+    assert_eq!(stranger, PatientKind::Unknown);
+
+    assert!(kind_banner(chart_kind(&c, invented).await.unwrap()).is_some());
+    assert!(kind_banner(stranger).is_some(), "unknown is never silent");
+    assert_eq!(kind_banner(chart_kind(&c, person).await.unwrap()), None);
+}
+
 /// What a clerk is shown. A search candidate carries the chart's kind, read through the one
 /// function that knows, so every surface built on a candidate can mark it (plan Task 5).
 #[tokio::test]

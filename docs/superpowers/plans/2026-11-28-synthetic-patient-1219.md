@@ -180,7 +180,10 @@ Tests first: pure tests on the text and row builders; golden tests where a colum
 - [ ] The chart: a permanent band, `SYNTHETIC PATIENT — not a real person`, above everything else on
       every tab. It cannot be dismissed. A chart whose registration is not held shows
       `Registration not yet received` in the same place, never nothing.
-- [ ] Every other row that names a patient carries the mark. Enumerate them by search, not from
+- [x] **CLI, built:** `medication-list`, `patient-sensitivity`, `patient-safety` and `duplicate-check
+      --patient` print one banner line first, from `patient/kind.rs`. `medication-list --json` puts it
+      on stderr only, which a machine reader does not see: still owed in the JSON itself.
+- [ ] Every other row that names a patient carries the mark (the window's; listed below). Enumerate them by search, not from
       memory, and list them in the PR: the person menu (ADR-0095), the funnel's prompts, the
       medication list's combined-read header, `medication-list`, `patient-sensitivity`,
       `patient-safety`, the duplicate-review worklist.

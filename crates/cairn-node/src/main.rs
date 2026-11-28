@@ -5019,6 +5019,12 @@ async fn run() -> anyhow::Result<()> {
             // code-plane update. `Cmd::Deferred` already takes this door for the same
             // reason; a confidentiality surface has less excuse than a listing to be stale.
             let mut db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
+            // ADR-0115: say first what kind of chart this is, when it is not a real person's.
+            if let Some(banner) = cairn_node::patient::kind::kind_banner(
+                cairn_node::patient::kind::chart_kind(&db, patient).await?,
+            ) {
+                println!("{banner}");
+            }
             let report = cairn_node::sensitivity::chart_sensitivity(&mut db, patient).await?;
             // Every line, including all wording, comes from the pure renderer — see
             // sensitivity/render.rs for why the sentences live there and not here. The
@@ -5033,6 +5039,12 @@ async fn run() -> anyhow::Result<()> {
         Cmd::PatientSafety { patient } => {
             // A pure read — no signing key, no HLC tick, nothing authored.
             let db = cairn_node::db::connect(&cli.conn).await?;
+            // ADR-0115: say first what kind of chart this is, when it is not a real person's.
+            if let Some(banner) = cairn_node::patient::kind::kind_banner(
+                cairn_node::patient::kind::chart_kind(&db, patient).await?,
+            ) {
+                println!("{banner}");
+            }
             let lines = cairn_node::safety::chart_safety(&db, patient).await?;
             if lines.is_empty() {
                 // AN EMPTY REPORT IS NOT A CLEAN BILL OF HEALTH (2026-08-14 review).
@@ -6068,6 +6080,19 @@ async fn run() -> anyhow::Result<()> {
         }
         Cmd::MedicationList { patient, json } => {
             let mut db = cairn_node::db::connect(&cli.conn).await?;
+            // ADR-0115: say first what kind of chart this is, when it is not a real person's.
+            // On STDERR under --json, as this command's other warnings are, so stdout stays
+            // one parseable document. NOT YET in the JSON itself: a machine reader that never
+            // looks at stderr does not learn it (the same gap #848 closed for `.elsewhere`).
+            if let Some(banner) = cairn_node::patient::kind::kind_banner(
+                cairn_node::patient::kind::chart_kind(&db, patient).await?,
+            ) {
+                if json {
+                    eprintln!("warning: {banner}");
+                } else {
+                    println!("{banner}");
+                }
+            }
             let list = cairn_node::medication::snapshot::in_snapshot(&mut db, async |tx| {
                 cairn_node::medication::read::list_patient_medications(tx, patient).await
             })
@@ -6445,6 +6470,13 @@ async fn run() -> anyhow::Result<()> {
                 dc::status_line(&dc::classify(&snap, dc::STALLED_AFTER_SECS))
             );
             if let Some(p) = patient {
+                // ADR-0115: a duplicate check on a synthetic chart is a check on an invented
+                // patient, and the operator reading its state should know that first.
+                if let Some(banner) = cairn_node::patient::kind::kind_banner(
+                    cairn_node::patient::kind::chart_kind(&db, p).await?,
+                ) {
+                    println!("{banner}");
+                }
                 println!("{}", dc::chart_line(dc::chart_check_pending(&db, p).await?));
             }
         }
