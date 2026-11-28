@@ -145,6 +145,16 @@
 > database that is not UTF8 before replaying anything (#1217; `cairn-sync init` has no such check). Filed and not
 > started: #1216 (the clinical CLI verbs run only as the database owner).
 >
+> > [!WARNING]
+> > **#1207 IS STOPPED (2026-11-28, #1220): ADR-0114 rests on a false premise.** It says a peer is served only if this
+> > node admitted it. True of the node plane (`cairn-node serve`, mutual TLS pinned to `trust_peer`). **False of the
+> > clinical plane:** `cairn-sync serve` listens on plain TCP and ships events to ANY puller, withholding only custody
+> > (deliberate; pinned by `an_unadmitted_puller_replicates_events_but_gains_no_custody`). So "the synthetic side
+> > carries the burden" does not hold as written, and registrations and demographics are unsealed. The one barrier
+> > left is the puller's own door refusing an unknown signer (db/020 step 2). **Build nothing for #1207 until the
+> > maintainer rules on #1220**; the correction is a new ADR, never an edit of ADR-0114. The plan's table and Task 3
+> > matrix, and security §7.7's paragraph, carry the same error.
+>
 > **#1207 is DECIDED, not built:** [ADR-0114](spec/decisions/0114-a-node-says-at-genesis-that-its-data-is-invented.md)
 > (maintainer's four rulings, 2026-11-28: node-level only, edge checks only, fixed at genesis, a distinct medium
 > magic). Plan: [`superpowers/plans/2026-11-28-synthetic-node-1207.md`](superpowers/plans/2026-11-28-synthetic-node-1207.md).

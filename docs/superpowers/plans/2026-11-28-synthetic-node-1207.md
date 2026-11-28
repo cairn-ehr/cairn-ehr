@@ -16,6 +16,13 @@ medium under its own container magic. Nothing on the clinical plane changes: an 
 **Tech stack:** PostgreSQL 18 SQL (db/088 new; db/007 and db/009 in place, as ADR-0080 allows), Rust
 (`cairn-event`, `cairn-node`, `cairn-medium`, `cairn-sync`, `cairn-gui`), Python (the cohort importer).
 
+> [!CAUTION]
+> **STOPPED at Task 0 (2026-11-28, #1220). Do not execute this plan as written.** Claim 1 below is FALSE for the
+> clinical plane: `cairn-sync serve` ships events to a puller it never admitted and withholds only custody, which
+> is deliberate and pinned by `an_unadmitted_puller_replicates_events_but_gains_no_custody`. The table's edge rows
+> and Task 3's matrix (notably "real, field unknown / synthetic: its pull fails") assume otherwise. ADR-0114 needs a
+> correcting ADR first; this plan is rewritten after it.
+
 > [!WARNING]
 > **Written from reading the code, not from running it.** Three claims this plan rests on were read and
 > not yet tested. Task 0 tests them before anything is built, and the plan changes if one is false:
