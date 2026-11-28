@@ -991,9 +991,11 @@ Every allergy slice 3 rule below still holds; the pick's door is a db/076 door l
   part's coding across an edit, or keep the old verdict drawn while the new check is in flight (a clean verdict for
   the old words reads as the new line's). Pins: `med_chart_webview_tests.rs::editing_a_picked_part_drops_its_coding`,
   `med_chart_line_webview_tests.rs::a_changed_drug_part_reads_not_checked_until_its_check_answers`.
-- **An opened line is always closable without signing**: Cancel, or Escape with no pick list open. **Tempting
-  wrong fix:** drop Cancel "because Escape exists" (Escape first closes the pick list), or ask "Discard this line?" (a
-  dialog). Pin: `med_chart_line_webview_tests.rs::an_opened_line_closes_without_signing`.
+- **An opened line is always closable without signing, and closing never deletes it** (batch charting slice 1
+  changed this rule: the lone line's Cancel is gone). Escape or Enter with no pick list open, or focus leaving the
+  field, finishes the line and closes the editor, and the list keeps it; discarding is the line's own Remove. **Tempting wrong fix:** bring back a
+  Cancel that discards (a list line is durable), or ask "Discard this line?" (a dialog). Pin:
+  `med_chart_line_webview_tests.rs::an_opened_line_closes_and_the_list_keeps_it`.
 - **The list's dose cell is `dose — sig`, and the row's accessible label says the SAME cell**. Built in
   `row_view.rs`'s `dose_cell`, never by a JS literal check. **Tempting wrong fix:** label the row with `dose` "because it
   is shorter" (a screen reader hears "dose not recorded" where the screen shows "1g IV stat"). Pins:
@@ -1744,18 +1746,19 @@ tests, `crates/cairn-node/tests/{note_commit,note_read,authority_lockstep,window
   `the_old_classifier_never_says_asserted`, `a_bearer_wins_over_asserted`;
   `authority_lockstep.rs::asserted_in_rust_is_unverified_in_sql`;
   `note_read.rs::a_note_drafted_by_an_agent_key_never_grades_went_in_unsigned`.
-- **The runner is a Rust task, one connection hold per draft, and the tick never reopens a lost connection.**
-  **Tempting wrong fixes:** move the tick into the webview as a `setInterval` (WebKit throttles a hidden window's
-  timers, so a minimised window stops committing); hold the connection for the whole pass (a clinician's press waits
-  behind every overdue draft on the node); reopen from the tick (a dead node is hammered every minute with nobody
-  there to read why). Pins: `notes_commit_tests.rs::the_tick_is_spawned_once_in_setup`,
+- **SUPERSEDED by ADR-0109 (#909 slice A block above): the window runs no commit, so the runner rule below is not
+  a live rule, and its pins no longer exist.** Kept for the record only; do not rebuild the window runner from it.
+  *(Superseded.)* **The runner is a Rust task, one connection hold per draft, and the tick never reopens a lost
+  connection.** **Tempting wrong fixes:** move the tick into the webview as a `setInterval` (WebKit throttles a
+  hidden window's timers, so a minimised window stops committing); hold the connection for the whole pass (a
+  clinician's press waits behind every overdue draft on the node); reopen from the tick (a dead node is hammered
+  every minute with nobody there to read why). Former pins: `the_tick_is_spawned_once_in_setup`,
   `each_draft_is_its_own_hold_and_the_tick_never_reopens`, `a_failed_commit_never_blocks_the_read`.
-- **A draft whose last commit FAILED says so; it never promises another try.** The window keeps the drafts whose
-  last commit failed (`AppState::commit_failed`, cleared by any try that did not fail) and the pane reads them.
-  **Tempting wrong fixes:** drop the commit's report at the chart read (`let _ =`) "because a failed commit must not
-  block the read" (the read must not be blocked, but a failure repeating every pass then reads "the window tries
-  again", and the next clinician leaves an abandoned note nobody will ever sign); show only "overdue" (the same
-  broken promise). Pins: `notes_commit_tests.rs::due_words_before_and_after`, `a_failed_commit_never_blocks_the_read`.
+- **A draft whose last commit FAILED says so; it never promises another try.** Still live (ADR-0109 decision 8
+  restates the wording). Since slice A the failure is a per-draft fact in the database, not window memory: see the
+  slice A block. **Tempting wrong fixes:** show "the window tries again" for a failure that repeats every pass (the
+  next clinician leaves an abandoned note nobody will ever sign), or show only "overdue" (the same broken promise).
+  Pin: `notes_commit_tests.rs::due_words_before_and_after`.
 
 **⇒ GUI SIGN-IN SLICE 3b-1 — WHO'S HERE AND A DRAFT'S PARTS (ADR-0088, db/066, db/065 in place) — do not undo**
 (pins: `db/tests/066_note_draft_parts_test.sql`, `crates/cairn-event/src/contributor.rs`'s tests,
