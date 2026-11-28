@@ -78,8 +78,11 @@ genesis with no conversion; a distinct medium format.
    - A real node on a current build refuses a synthetic offer too. That is a second barrier and a
      clear message for the operator; the guarantee does not rest on it.
    - The refusal is made in the floor (`submit_node_event`, for `peer.added`), so a client that builds
-     its own node event meets it as well. Each sync session also opens by stating the class and closes
-     on a difference.
+     its own node event meets it as well.
+   - **What a peer signed in its bundle is then checked against what it is.** A peer's genesis is the
+     first thing the node plane pulls from it, and its hash is the node id that was pinned. The remote
+     door (`apply_remote_node_event`) refuses a genesis whose class differs from this node's, so a
+     bundle that misstated the class buys nothing: the peer's events are never admitted.
 
 4. **A class this build does not know is refused by everyone.** A `data_class` other than `synthetic`
    is neither real nor synthetic to this build: it pairs with nothing, and says why. A later decision
@@ -134,7 +137,7 @@ Stated plainly, because the value of this decision is in knowing where it stops.
   never read beside a real feed gets something to check on Cairn's side.
 - **Harder:** two more fields on the node plane (genesis, pairing bundle) and one more container magic
   to carry and test. Every door that joins nodes or rebuilds one has to be named and covered by the
-  build's plan: `pair-accept`, the two serve handshakes, `restore`, `backup`, and the terminal gateway
+  build's plan: `pair-accept`, the two remote doors, `restore`, `backup`, and the terminal gateway
   (a terminal follows its node, [ADR-0112](0112-a-terminal-follows-its-node.md), and must show its
   node's class).
 - **Paper-parity:** the paper counterpart is a dummy chart with TRAINING stamped across the cover. The

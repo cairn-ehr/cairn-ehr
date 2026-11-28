@@ -147,9 +147,10 @@
 >
 > **#1207 is DECIDED, not built:** [ADR-0114](spec/decisions/0114-a-node-says-at-genesis-that-its-data-is-invented.md)
 > (maintainer's four rulings, 2026-11-28: node-level only, edge checks only, fixed at genesis, a distinct medium
-> magic). **⇒ next on this thread:** the slice plan, which must name every door that joins or rebuilds a node
-> (`pair-accept`, both serve handshakes, `restore`, `backup`, the terminal gateway) and check that the pairing bundle
-> tolerates a field an older build does not know. Until it is built, the importer's script guard is all there is. The
+> magic). Plan: [`superpowers/plans/2026-11-28-synthetic-node-1207.md`](superpowers/plans/2026-11-28-synthetic-node-1207.md).
+> **⇒ next on this thread: its Task 0**, which TESTS the three things the plan only read (a peer is served on both
+> planes only if admitted here; an older build reads a bundle with a field it does not know; an older build
+> refuses an unknown medium magic). If the first is false, ADR-0114 decision 3 is wrong and is corrected before any code. Until it is built, the importer's script guard is all there is. The
 > chart-level half (a training patient on a real node) is #1219.
 
 > [!NOTE]
