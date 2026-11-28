@@ -156,7 +156,12 @@
 > a design on "a peer is served only if admitted" without reading that test.
 > **Not guaranteed, and the maintainer accepted each:** an older build shows a synthetic chart as real; a wrong mark
 > cannot be repaired until reattribution (§5.5) is built; charts already loaded by the cohort importer are unmarked.
-> **⇒ next on this thread:** the slice plan for ADR-0115. The #1207 plan is withdrawn (its file says so).
+> **Plan:** [`superpowers/plans/2026-11-28-synthetic-patient-1219.md`](superpowers/plans/2026-11-28-synthetic-patient-1219.md).
+> It lists each premise with HOW it is known. Two were RUN before the plan was written
+> (`tests/registration_tolerates_an_unknown_field.rs`: both doors admit a registration with a field the build does not
+> know, register the chart and keep the field, so an older build shows a synthetic chart as real and marks it on
+> upgrade + reproject). Five are only READ. **⇒ next on this thread: the plan's Task 0, which runs those five and
+> builds nothing.** The #1207 plan is withdrawn (its file says so).
 
 > [!NOTE]
 > **Merged 2026-10-18 → 10-31** (PRs #802 → #895; ROADMAP has each, durable-rules their blocks; ADR-0081, ADR-0082).
