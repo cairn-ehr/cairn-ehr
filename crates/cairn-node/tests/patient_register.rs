@@ -23,7 +23,9 @@
 mod common;
 
 use cairn_node::db;
-use cairn_node::patient::register::{register_patient, register_patient_returning_event};
+use cairn_node::patient::register::{
+    register_patient, register_patient_returning_event, register_synthetic_patient_returning_event,
+};
 use cairn_patient_search::{Candidate, CandidateList, PersonRow, SearchQuery, TrustState};
 use common::{cs, setup};
 use tokio_postgres::Client;
@@ -342,4 +344,56 @@ async fn returns_the_registration_event_id_a_lost_commit_names() {
         .unwrap()
         .get(0);
     assert_eq!(got.event_id.to_string(), recorded);
+}
+
+/// ADR-0115: the orchestrator a `patient-register --synthetic` runs. The chart is marked, the
+/// search that preceded it is attested exactly as for any patient (a trainee learns the
+/// funnel by using it), and the ordinary orchestrator beside it still registers a real one.
+#[tokio::test]
+async fn a_synthetic_registration_is_marked_and_still_carries_its_search() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let shown = [Uuid::now_v7()];
+    let list = CandidateList {
+        people: PersonRow::each_alone(shown.iter().map(|id| candidate(*id)).collect()),
+        incomplete: false,
+        incomplete_reason: None,
+    };
+    let query = SearchQuery::new("training patient", Some("1970-01-01"), &[]);
+
+    let invented =
+        register_synthetic_patient_returning_event(&mut c, &sk, &kid, "n", None, &query, &list)
+            .await
+            .expect("a synthetic registration is accepted")
+            .value;
+    let person = register_patient(&mut c, &sk, &kid, "n", None, &query, &list)
+        .await
+        .expect("a real registration is accepted");
+
+    let kind = |p: Uuid| {
+        let c = &c;
+        async move {
+            c.query_one(
+                "SELECT cairn_chart_synthetic($1::text::uuid)",
+                &[&p.to_string()],
+            )
+            .await
+            .unwrap()
+            .get::<_, String>(0)
+        }
+    };
+    assert_eq!(kind(invented).await, "synthetic");
+    assert_eq!(kind(person).await, "real");
+
+    // The funnel applied to the invented patient too: one candidate was on screen.
+    let (class, _basis, displayed_count, incomplete) = projected_row(&c, invented).await;
+    assert_eq!(class, "standard");
+    assert_eq!(displayed_count, 1);
+    assert_eq!(incomplete, Some(false));
 }

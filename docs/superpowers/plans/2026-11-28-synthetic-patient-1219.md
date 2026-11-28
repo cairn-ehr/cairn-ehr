@@ -74,6 +74,13 @@ Nothing is built here. Each becomes a test that passes on `main`, kept as a pin.
       `candidate_read.rs` is the only reader of candidate details.
 - [ ] If any of 3 to 6 is false, **stop and correct this plan before Task 1**.
 
+> [!NOTE]
+> **Tasks 1 and 2 are built** (PR #1222). Where the build differs from the text below, the code and its
+> comments win: a malformed mark from a peer is read as MARKED (the visible direction) and not reported
+> through a separate function; the two re-declared functions live in db/088 with a guard test holding each
+> equal to its original plus one addition; and `db/tests/088_…sql` was not written, the Rust suite
+> `synthetic_patient.rs` covering it.
+
 ## Task 1 — the mark in the event and the projection (`cairn-event`, db/088, db/045)
 
 Tests first: unit tests in `cairn-event::registration`; `db/tests/088_synthetic_patient_test.sql`;
@@ -144,8 +151,12 @@ Tests first, in `matcher/tests` and `tests/match_proposal*.rs`.
 
 Tests first. The page decides nothing; the wording and the mark are built in Rust.
 
-- [ ] `patient-register --synthetic` and `register-john-doe --synthetic`. The success line begins
-      `registered SYNTHETIC patient`.
+- [x] `patient-register --synthetic` (built). **Differs from this line as first written:** the first
+      two output lines are unchanged, because the RUNBOOK's `sed` and the cohort importer read the chart
+      id from them; the mark is a THIRD line, `SYNTHETIC patient: not a real person. This cannot be
+      changed.` It is a function of its own beside the ordinary registration, not a `bool` argument,
+      so no call site can pass the wrong one.
+- [ ] `register-john-doe --synthetic`. Not built.
 - [ ] The window: a separate act, **Register a training patient**, not a tick box beside Register. A
       tick box is one mis-click from marking a real patient, and that mark cannot be unmade. The form
       shows the band from the moment it opens.
@@ -182,10 +193,11 @@ Tests first: pure tests on the text and row builders; golden tests where a colum
 
 ## Task 6 — the loader and the sibling (`scripts/import_synthetic_cohort.py`, ReportTriage)
 
-- [ ] The importer registers with `--synthetic` and refuses a `cairn-node` too old to know the flag,
+- [x] The importer registers with `--synthetic` and refuses a `cairn-node` too old to know the flag,
       naming the remedy. Its guard against a node holding other charts, and that guard's tests, are
-      deleted together.
-- [ ] A cohort loaded before this is built is unmarked. The importer detects such charts (they carry
+      deleted together. It also checks that the node SAID the patient is synthetic and stops that
+      patient if it did not.
+- [x] A cohort loaded before this is built is unmarked. The importer detects such charts (they carry
       the cohort's record-number system and `cairn_chart_synthetic` says `real`), refuses to add to
       them, and says the database must be loaded again.
 - [ ] An issue on ReportTriage: its `--synthetic` mode can check each chart, and its rule that a

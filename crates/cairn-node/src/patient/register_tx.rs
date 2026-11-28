@@ -28,6 +28,7 @@ use uuid::Uuid;
 /// back that savepoint, or the whole transaction, before using it again. The #815
 /// outcome-unknown mapping is NOT applied here: the caller owns the commit, so it applies
 /// `db_diagnosis::commit_failure` to its own commit using the returned event id.
+#[allow(clippy::too_many_arguments)] // signer + node context + what was typed, and the mark
 pub async fn register_patient_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     sk: &SigningKey,
@@ -36,6 +37,11 @@ pub async fn register_patient_in_tx(
     name: Option<&str>,
     query: &SearchQuery,
     displayed: &CandidateList,
+    // ADR-0115: register an INVENTED patient. Last, and a plain bool, because exactly two
+    // callers pass `true` and both go through `register_synthetic_patient_returning_event`,
+    // whose name says it; every other caller passes a literal `false` beside this comment's
+    // twin at its call site. The search-before-create funnel applies to both kinds alike.
+    synthetic: bool,
 ) -> anyhow::Result<Committed<Uuid>> {
     let patient_id = Uuid::now_v7();
     let attestation = SearchAttestation::from_displayed(query, displayed);
@@ -93,6 +99,7 @@ pub async fn register_patient_in_tx(
         registration_event_id,
         patient_id,
         RegistrationClass::Standard,
+        synthetic,
         None,
         Some(&attestation),
         kid,

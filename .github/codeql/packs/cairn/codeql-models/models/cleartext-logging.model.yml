@@ -116,6 +116,13 @@ extensions:
       # (the `patient-register` success line)
       - ["cairn_node::patient::register::registered_patient_lines", "ReturnValue", "log-injection", "manual"]
 
+      # Returns String: `registered_patient_lines` above (two random v7 record ids) plus the fixed
+      # sentence "SYNTHETIC patient: not a real person. This cannot be changed." Its inputs are
+      # the same two Uuids and nothing else. Added PRE-EMPTIVELY for the `patient_id` parameter
+      # that got the function it wraps flagged; no alert has been seen for it.
+      # (the `patient-register --synthetic` success lines, ADR-0115)
+      - ["cairn_node::patient::register::registered_synthetic_patient_lines", "ReturnValue", "log-injection", "manual"]
+
       # Returns String: one "recorded <kind> for <chart id>; event <event id>" line per fact — a
       # fixed label ("address", "administrative sex", …) and two random v7 record identifiers,
       # printed ON PURPOSE (#826) as every evidence verb prints them. The facts are an input, and

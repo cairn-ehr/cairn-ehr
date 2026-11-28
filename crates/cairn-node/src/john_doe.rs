@@ -253,6 +253,9 @@ pub async fn register_john_doe_returning_event(
         registration_event_id,
         patient_id,
         RegistrationClass::Unidentified,
+        // Not synthetic. An invented John Doe for training is ADR-0115's to add here
+        // (plan Task 4); today this door registers real unidentified patients only.
+        false,
         Some(basis),
         None,
         kid,

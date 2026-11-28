@@ -125,6 +125,7 @@ class FakeNode:
         self.calls: list[list[str]] = []
         self.fail_medication_after: int | None = None  # simulate a crash part-way
         self.fail_demographics = False
+        self.forgets_the_mark = False  # a node that registers but does not mark
 
     # -- helpers -------------------------------------------------------------------------
     def _flag(self, argv, name):
@@ -147,7 +148,9 @@ class FakeNode:
 
     def add_foreign_lookalike(self, name):
         chart = str(uuid.uuid4())
-        self.charts[chart] = {"name": name, "identifiers": set(), "medicines": []}
+        # A foreign chart is a REAL patient's: this script did not register it.
+        self.charts[chart] = {"name": name, "identifiers": set(), "medicines": [],
+                              "synthetic": False}
         return chart
 
     # -- the verbs -----------------------------------------------------------------------
@@ -163,11 +166,14 @@ class FakeNode:
                 return done(1, self._table(shown),
                             f"Error: {len(shown)} candidate(s) already on file\n")
             chart = str(uuid.uuid4())
+            marked = "--synthetic" in argv and not self.forgets_the_mark
             self.charts[chart] = {"name": self._flag(argv, "--name")[0],
                                   "identifiers": set(self._flag(argv, "--identifier")),
-                                  "medicines": []}
+                                  "medicines": [], "synthetic": marked}
+            said = "SYNTHETIC patient: not a real person. This cannot be changed.\n"
             return done(0, self._table(shown) +
-                        f"registered patient {chart}\nregistration event {uuid.uuid4()}\n", "")
+                        f"registered patient {chart}\nregistration event {uuid.uuid4()}\n" +
+                        (said if marked else ""), "")
         if verb == "medication-assert":
             chart = argv[1]
             written = sum(len(c["medicines"]) for c in self.charts.values())
@@ -200,6 +206,10 @@ class FakeNode:
         if verb == "medication-list":
             return done(0, json.dumps({"rows": self.charts[argv[1]]["medicines"]}), "")
         raise AssertionError(f"the importer ran a verb the stand-in does not know: {argv}")
+
+    def kind(self, chart):
+        """What `cairn_chart_synthetic` answers for a chart."""
+        return "synthetic" if self.charts[chart].get("synthetic") else "real"
 
     def have(self, chart):
         """What the real reader gets from the projections: the fields a chart carries."""
@@ -304,8 +314,11 @@ def test_registration_uses_cairns_spelling_of_each_identifier_system(m) -> None:
         "--identifier", "mrn-shd-abc=SHD000001",
         "--identifier", "ihi-au=8003600006972035",
         "--identifier", "medicare-au=20016275733",
+        "--synthetic",
     ]
     assert "--confirm-new" not in argv
+    # Every registration this script makes is of an invented patient, past candidates too.
+    assert "--synthetic" in m.register_argv(_patient(m), "mrn-shd-abc", confirm_new=True)
 
 
 def test_an_identifier_in_an_unknown_system_is_dropped_and_counted_never_guessed(m) -> None:
@@ -366,7 +379,7 @@ def test_a_failure_is_reported_by_its_cause_not_its_stack(m) -> None:
 def _run(m, node, **kw):
     with tempfile.TemporaryDirectory() as tmp:
         cohort = m.read_cohort(write_cohort(tmp, **kw.pop("cohort", {})))
-    return m.import_cohort(cohort, node, m.Options(**kw), node.have)
+    return m.import_cohort(cohort, node, m.Options(**kw), node.have, node.kind)
 
 
 def test_an_address_is_one_line_and_a_missing_part_is_left_out_not_invented(m) -> None:
@@ -475,6 +488,7 @@ def test_two_charts_under_one_record_number_are_held_for_a_person(m) -> None:
     system = m.mrn_system(SPEC)
     twin = node.add_foreign_lookalike("B. Chipp")
     node.charts[twin]["identifiers"] = {f"{system}=SHD000001"}
+    node.charts[twin]["synthetic"] = True
     before = len(node.writes())
     report = _run(m, node)
     assert report.patients_held == 1
@@ -530,20 +544,41 @@ def test_a_dry_run_needs_no_node(m) -> None:
         assert m.main([str(write_cohort(tmp)), "--dry-run"]) == 0
 
 
-def test_the_command_refuses_a_node_holding_anyone_elses_charts(m) -> None:
-    """Until Cairn can mark a chart as invented (#1207) this guard is all there is."""
-    real_count = m.foreign_chart_count
-    m.foreign_chart_count = lambda conn: 4
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            assert m.main([str(write_cohort(tmp)), "--conn", "host=x"]) == 2
-    finally:
-        m.foreign_chart_count = real_count
+def test_a_chart_left_unmarked_by_an_earlier_run_is_held_and_nothing_is_added(m) -> None:
+    """Before patients could be marked, this script registered them unmarked. Such a chart
+    reads as a real patient; adding medicines to it would grow that. It cannot be marked
+    afterwards (ADR-0115), so the only honest outcome is to stop and say so."""
+    node = FakeNode(m)
+    _run(m, node)
+    for chart in node.charts.values():
+        chart["synthetic"] = False  # as an earlier build left them
+        chart["medicines"] = []
+    before = len(node.writes())
+    report = _run(m, node)
+    assert len(node.writes()) == before, "something was written to an unmarked chart"
+    assert report.patients_held == 2 and report.incomplete()
+    assert "empty database" in report.held[0]["why"]
 
 
-def test_the_guard_counts_only_charts_without_a_cohort_record_number(m) -> None:
-    sql = m.FOREIGN_CHARTS_SQL
-    assert f"LIKE '{m.MRN_SYSTEM_PREFIX}%'" in sql and "NOT EXISTS" in sql
+def test_a_registration_the_node_did_not_mark_stops_that_patient(m) -> None:
+    """Asking for the mark and getting it are two facts. If the node registers without
+    saying SYNTHETIC, the chart exists unmarked, and nothing more may be written to it."""
+    node = FakeNode(m)
+    node.forgets_the_mark = True
+    report = _run(m, node)
+    assert report.patients_failed == 2 and report.patients_registered == 0
+    assert "WITHOUT the synthetic mark" in report.failures[0]["why"]
+    assert not any(c[0] in ("medication-assert", "patient-demographics") for c in node.calls)
+
+
+def test_the_nodes_own_output_decides_whether_it_can_and_did_mark(m) -> None:
+    assert m.knows_synthetic("      --confirm-new\n      --synthetic\n  -h, --help\n")
+    assert not m.knows_synthetic("      --confirm-new\n  -h, --help\n")
+    assert m.says_synthetic("registered patient x\nregistration event y\n"
+                            "SYNTHETIC patient: not a real person. This cannot be changed.\n")
+    assert not m.says_synthetic("registered patient x\nregistration event y\n")
+    # A candidate row that merely contains the word is not the node saying so.
+    assert not m.says_synthetic("abc  SYNTHETIC patient Smith   70  ok\n")
 
 
 def main() -> int:
@@ -551,7 +586,7 @@ def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     # A runner that collects tests by NAME PREFIX must say how many it expected to find:
     # rename the prefix and an empty list prints "0 passed" and exits 0.
-    if len(tests) < 29:
+    if len(tests) < 30:
         raise AssertionError(
             f"collected only {len(tests)} tests; this file has more than that. The collector "
             "matches names starting `test_`, so a rename can silently empty it."
