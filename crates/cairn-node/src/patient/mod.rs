@@ -16,6 +16,7 @@
 pub mod candidate_read;
 pub mod candidate_text;
 pub mod compare;
+pub mod demographic;
 pub mod edges;
 pub mod person;
 pub mod register;

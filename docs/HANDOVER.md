@@ -131,10 +131,19 @@
 > What it found: **the funnel showed existing charts for 34 of 300 registrations** (a shared name, a name that is the
 > start of another, or a shared date of birth alone), so a scripted load needs `--register-past-candidates`;
 > **`cairn-node`'s clinical verbs run only as the database owner** (`cairn_node` may not search, `cairn_agent` may not
-> read `local_node` or `actor_event`). No door or no stream for the rest: #1206 (an author not enrolled here) ·
+> read `local_node` or `actor_event`; #1216). No door or no stream for the rest: #1206 (an author not enrolled here) ·
 > #1207 (**nothing marks a chart or node as synthetic: never peer a node this script wrote to**) · #1208 (results) ·
 > #1209 (problem list) · #1210 (received documents) · #1211 (address, sex) · #1212 (notes and allergies outside the
 > window, bulk registration) · #1213 (ADR-0035 entities). The generator's own limits are SyntheticHealthData #18–#20.
+>
+> **Follow-on, same day (PR pending on `claude/trusting-dijkstra-7eaeul`):** `cairn-node patient-demographics` records a
+> stated sex, gender identity, sex at birth, an address (its display line only) and a further name with its use, with
+> a REQUIRED `--provenance` (#1211 slice 1; plan
+> [`superpowers/plans/2026-11-28-demographics-door-1211-slice-1.md`](superpowers/plans/2026-11-28-demographics-door-1211-slice-1.md)).
+> The importer now loads sex and address as `imported`. **Still open on #1211:** the window has no fields for them, no
+> CLI verb reads them back, and there is no Australian address profile. `connect_and_load_schema` now refuses a
+> database that is not UTF8 before replaying anything (#1217; `cairn-sync init` has no such check). Filed and not
+> started: #1216 (the clinical CLI verbs run only as the database owner).
 
 > [!NOTE]
 > **Merged 2026-10-18 → 10-31** (PRs #802 → #895; ROADMAP has each, durable-rules their blocks; ADR-0081, ADR-0082).

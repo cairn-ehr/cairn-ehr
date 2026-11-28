@@ -222,7 +222,7 @@ operation. Grouped:
 - **Staff and the vault:** `enroll-human`, `vault-bootstrap-superuser`, `vault-rekey-superuser`,
   `vault-repudiate-superuser-key`, `vault-set-terminal-passphrase`, `vault-set-unconfirmed-expiry`,
   `note-set-quarantine`.
-- **Patients and identity:** `patient-search`, `patient-register`, `register-john-doe`,
+- **Patients and identity:** `patient-search`, `patient-register`, `patient-demographics`, `register-john-doe`,
   `identify-patient`, `link-charts`, `unlink-charts`, `assert-identity-evidence`,
   `assert-observed-evidence`, `apply-auto-candidates`, `duplicate-check`.
 - **Medication:** `medication-assert`, `-change-dose`, `-correct-dose`, `-cease`, `-withhold`,

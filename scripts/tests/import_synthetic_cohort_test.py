@@ -71,7 +71,8 @@ def write_cohort(directory, *, application_id=None, provenance="synthetic", spec
         CREATE TABLE manifest (id INTEGER PRIMARY KEY, database_format INTEGER,
                                provenance TEXT, spec TEXT);
         CREATE TABLE patient (id TEXT PRIMARY KEY, family TEXT, given TEXT, sex TEXT,
-                              birth_date TEXT);
+                              birth_date TEXT, street TEXT, suburb TEXT, state TEXT,
+                              postcode TEXT);
         CREATE TABLE patient_identifier (patient_id TEXT, n INTEGER, system TEXT, value TEXT);
         CREATE TABLE medication (patient_id TEXT, n INTEGER, drug TEXT, started TEXT,
                                  stopped TEXT, drugref TEXT);
@@ -84,8 +85,10 @@ def write_cohort(directory, *, application_id=None, provenance="synthetic", spec
     db.execute("INSERT INTO manifest VALUES (1, ?, ?, ?)",
                (database_format, provenance, json.dumps(spec)))
     for i, (mrn, given, family, born, medicines) in enumerate(people):
-        db.execute("INSERT INTO patient VALUES (?, ?, ?, 'female', ?)",
-                   (mrn, family, given, born))
+        db.execute(
+            "INSERT INTO patient VALUES (?, ?, ?, 'female', ?, ?, 'SOLDIERS HILL', 'VIC', '3350')",
+            (mrn, family, given, born, f"{i + 1} Kurrajong Place"),
+        )
         # The seed is in the numbers because another seed's people are other people: only
         # the record number (SHD000001…) is reused across cohorts, as in the real generator.
         seed = spec["seed"]
@@ -121,6 +124,7 @@ class FakeNode:
         self.charts: dict[str, dict] = {}  # chart id -> {name, identifiers, medicines}
         self.calls: list[list[str]] = []
         self.fail_medication_after: int | None = None  # simulate a crash part-way
+        self.fail_demographics = False
 
     # -- helpers -------------------------------------------------------------------------
     def _flag(self, argv, name):
@@ -179,6 +183,15 @@ class FakeNode:
             })
             return done(0, f"recorded medication for {chart}; thread {thread}; "
                            f"event {uuid.uuid4()}\n", "")
+        if verb == "patient-demographics":
+            if self.fail_demographics:
+                return done(1, "", "Error: connection closed\n")
+            chart = self.charts[argv[1]]
+            assert self._flag(argv, "--provenance") == ["imported"]
+            for flag, key in (("--administrative-sex", "sex"), ("--address", "address")):
+                for value in self._flag(argv, flag):
+                    chart.setdefault(key, []).append(value)
+            return done(0, "recorded\n", "")
         if verb == "medication-cease":
             for med in self.charts[argv[1]]["medicines"]:
                 if med["thread"] == argv[2]:
@@ -188,9 +201,18 @@ class FakeNode:
             return done(0, json.dumps({"rows": self.charts[argv[1]]["medicines"]}), "")
         raise AssertionError(f"the importer ran a verb the stand-in does not know: {argv}")
 
+    def have(self, chart):
+        """What the real reader gets from the projections: the fields a chart carries."""
+        held = self.charts[chart]
+        return frozenset(
+            field for key, field in (("sex", self.m.SEX_FIELD), ("address", self.m.ADDRESS_FIELD))
+            if held.get(key)
+        )
+
     def writes(self):
         return [c for c in self.calls
-                if c[0] in ("patient-register", "medication-assert", "medication-cease")]
+                if c[0] in ("patient-register", "patient-demographics", "medication-assert",
+                            "medication-cease")]
 
 
 # ---------------------------------------------------------------------------------------
@@ -239,9 +261,11 @@ def test_the_cohort_is_read_with_what_must_be_left_behind(m) -> None:
     assert [p.mrn for p in cohort.patients] == ["SHD000001", "SHD000002"]
     assert cohort.patients[0].medicines[1].stopped == "2024-01-05"
     assert cohort.left_behind == {
-        "sex": 2, "address": 2, "conditions": 3, "pathology results": 7,
-        "progress notes": 1, "imaging reports": 1, "specialist letters": 2, "clinicians": 1,
+        "conditions": 3, "pathology results": 7, "progress notes": 1, "imaging reports": 1,
+        "specialist letters": 2, "clinicians": 1,
     }
+    assert cohort.patients[0].sex == "female"
+    assert cohort.patients[0].address == "1 Kurrajong Place, SOLDIERS HILL VIC 3350"
     # Every kind left behind has a stated reason: a count with no explanation is noise.
     assert set(cohort.left_behind) <= set(m.WHY_LEFT_BEHIND)
 
@@ -342,7 +366,51 @@ def test_a_failure_is_reported_by_its_cause_not_its_stack(m) -> None:
 def _run(m, node, **kw):
     with tempfile.TemporaryDirectory() as tmp:
         cohort = m.read_cohort(write_cohort(tmp, **kw.pop("cohort", {})))
-    return m.import_cohort(cohort, node, m.Options(**kw))
+    return m.import_cohort(cohort, node, m.Options(**kw), node.have)
+
+
+def test_an_address_is_one_line_and_a_missing_part_is_left_out_not_invented(m) -> None:
+    assert m.address_line("197 Kurrajong Place", "SOLDIERS HILL", "VIC", "3350") == (
+        "197 Kurrajong Place, SOLDIERS HILL VIC 3350")
+    assert m.address_line(None, "SOLDIERS HILL", "VIC", None) == "SOLDIERS HILL VIC"
+    assert m.address_line("", " ", None, "") is None
+
+
+def test_sex_and_address_are_recorded_as_imported_and_only_once(m) -> None:
+    node = FakeNode(m)
+    first = _run(m, node)
+    assert (first.demographics_recorded, first.demographics_failed) == (2, 0)
+    chart = next(c for c in node.charts.values() if c["name"] == "Biwei Chipp")
+    assert chart["sex"] == ["female"]
+    assert chart["address"] == ["1 Kurrajong Place, SOLDIERS HILL VIC 3350"]
+    second = _run(m, node)
+    assert (second.demographics_recorded, second.demographics_already_present) == (0, 2)
+    assert chart["sex"] == ["female"], "the second run recorded the sex again"
+
+
+def test_a_chart_that_has_its_sex_but_lost_its_address_gets_only_the_address(m) -> None:
+    """One command carries both, so this needs a chart half-filled by other means; the
+    importer must still fill only the gap and not repeat what stands."""
+    node = FakeNode(m)
+    _run(m, node)
+    chart = next(c for c in node.charts.values() if c["name"] == "Biwei Chipp")
+    chart["address"] = []
+    _run(m, node)
+    assert chart["sex"] == ["female"]
+    assert chart["address"] == ["1 Kurrajong Place, SOLDIERS HILL VIC 3350"]
+    last = [c for c in node.calls if c[0] == "patient-demographics"][-1]
+    assert "--administrative-sex" not in last
+
+
+def test_a_failed_demographics_write_is_counted_and_retried_next_run(m) -> None:
+    node = FakeNode(m)
+    node.fail_demographics = True
+    first = _run(m, node)
+    assert first.demographics_failed == 2 and first.incomplete()
+    assert first.medicines_recorded == 3, "one failed step must not stop the patient's others"
+    node.fail_demographics = False
+    second = _run(m, node)
+    assert (second.demographics_recorded, second.incomplete()) == (2, False)
 
 
 def test_a_fresh_node_receives_every_patient_and_medicine(m) -> None:
@@ -483,7 +551,7 @@ def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     # A runner that collects tests by NAME PREFIX must say how many it expected to find:
     # rename the prefix and an empty list prints "0 passed" and exits 0.
-    if len(tests) < 25:
+    if len(tests) < 29:
         raise AssertionError(
             f"collected only {len(tests)} tests; this file has more than that. The collector "
             "matches names starting `test_`, so a rename can silently empty it."
