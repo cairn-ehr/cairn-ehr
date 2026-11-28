@@ -55,6 +55,7 @@ fn registration_with_an_unknown_field(sk: &SigningKey, kid: &str, patient: Uuid)
     let tokens = [patient.to_string()];
     let a = RegistrationAssertion {
         class: RegistrationClass::Standard,
+        synthetic: false,
         basis: None,
         search: Some(SearchAttestationInput {
             terms: SearchTerms {

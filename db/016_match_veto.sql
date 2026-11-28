@@ -161,6 +161,9 @@ $$;
 -- (or a bespoke helper if deceased needs different clash semantics). See the
 -- design doc §6 and HANDOVER. Do NOT silently drop it.
 -- ---------------------------------------------------------------------------
+-- ⚠️ SUPERSEDED ON REPLAY by db/088, which re-declares this function with one more arm
+-- (ADR-0115, a pair across the synthetic line). The body below is the first three arms of
+-- the live one; change BOTH, or the guard test named in db/088's header fails.
 CREATE OR REPLACE FUNCTION cairn_match_veto(p_a uuid, p_b uuid)
 RETURNS TABLE(veto_kind text, severity text, subject text, detail text)
 LANGUAGE sql STABLE AS $$

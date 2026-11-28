@@ -55,6 +55,8 @@ const WIDENED: &[(&str, &str)] = &[
     ("medication_draft_line", "restores"),
     // Charting slice 2: a stat order, paired ALTER in db/077.
     ("medication_charting", "stat"),
+    // ADR-0115: the patient is synthetic. Added by ALTER in db/045, never in its CREATE.
+    ("patient_registration", "synthetic"),
 ];
 
 #[tokio::test]

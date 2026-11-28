@@ -197,6 +197,7 @@ pub fn build_registration_body(
     });
     let assertion = RegistrationAssertion {
         class,
+        synthetic: false,
         basis,
         search,
     };

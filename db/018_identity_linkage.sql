@@ -432,6 +432,24 @@ BEGIN
     -- decision. Unreachable on this branch today (the remote_apply guard below skips it for
     -- every replicated event, and a deferred event only ever arrives replicated), but a
     -- reader must not have to prove that to trust the line.
+    -- ADR-0115: a link between a chart of a synthetic patient and one of a real person is
+    -- refused HERE WHOEVER SIGNS IT. This sits BEFORE the hard-veto check and is stronger
+    -- than it on purpose: the veto forces a human decision and an attestation lifts it,
+    -- because two real people can share a date of birth. No decision makes an invented
+    -- patient a real one. `v_attested` is deliberately not consulted.
+    --
+    -- Local door only, for the reason given above for the veto: the verdict reads this
+    -- node's registrations, and a peer's link is admitted so the event set never forks. It
+    -- is then flagged below, and cairn_person_charts (db/088) never joins the pair.
+    -- An UNLINK across the line is always admitted: it is the repair.
+    IF v_state = 'link'
+       AND cairn_charts_straddle_synthetic_line(lo, hi)
+       AND current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on' THEN
+        RAISE EXCEPTION
+            'identity link %/%: one chart is of a synthetic patient and the other is not — no signature lifts this (ADR-0115). If a chart carries the wrong mark, register the patient correctly and reattribute; do not link',
+            lo, hi;
+    END IF;
+
     IF v_state = 'link'
        AND NOT v_attested
        AND cairn_has_hard_veto(lo, hi)
@@ -490,7 +508,13 @@ BEGIN
       FROM patient_link pl
       WHERE pl.low = lo AND pl.high = hi;
 
-    IF v_win_state = 'link' AND NOT v_win_attested AND cairn_has_hard_veto(lo, hi) THEN
+    -- ADR-0115: a standing link across the synthetic line is flagged whether or not it is
+    -- attested (an attestation does not settle it; see the refusal above). It reaches here
+    -- only from a peer, or by arriving before the registration that shows which side a
+    -- chart is on.
+    IF v_win_state = 'link'
+       AND ((NOT v_win_attested AND cairn_has_hard_veto(lo, hi))
+            OR cairn_charts_straddle_synthetic_line(lo, hi)) THEN
         INSERT INTO link_veto_flag (low, high, content_address)
         VALUES (lo, hi, v_win_ca)
         ON CONFLICT (low, high) DO UPDATE SET content_address = EXCLUDED.content_address;

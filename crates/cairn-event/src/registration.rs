@@ -85,6 +85,14 @@ pub struct SearchAttestationInput<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct RegistrationAssertion<'a> {
     pub class: RegistrationClass,
+    /// The patient is INVENTED: a training or test chart, not a person (ADR-0115).
+    ///
+    /// A fact of its own and deliberately not a fourth class. The class says how much is
+    /// known about who the patient is; this says whether there is anyone to know about,
+    /// and every class needs it (an emergency department trains on an invented John Doe).
+    /// It is stated once, at the chart's birth, and nothing later changes it: everything
+    /// filed under the chart is synthetic because the chart is.
+    pub synthetic: bool,
     /// Why this class. Carried for the non-standard classes, where it is genuinely
     /// informative ("unconscious ED arrival, no ID"). Omitted for `Standard`: there the
     /// class IS the explanation, and a mandatory free-text box would be a required field
@@ -98,6 +106,12 @@ pub struct RegistrationAssertion<'a> {
 /// wire shape is unit-testable with no clock, no database and no key.
 pub fn registration_assertion_body(a: &RegistrationAssertion) -> Value {
     let mut body = json!({ "class": a.class.as_str() });
+    // Written ONLY when true. A real registration stays byte-for-byte what it was before
+    // this field existed, and there is one spelling of "real": the field's absence. An
+    // explicit `false` would be a second one, and the db/045 floor refuses it.
+    if a.synthetic {
+        body["synthetic"] = json!(true);
+    }
     if let Some(basis) = a.basis {
         body["basis"] = json!(basis);
     }
@@ -128,7 +142,15 @@ pub fn registration_assertion_body(a: &RegistrationAssertion) -> Value {
 /// The mandatory §3.13 legibility twin: this act in plain language, for a reader with no
 /// schema at all (principle 11). Mechanically derived from the same inputs as the payload.
 pub fn render_registration_twin(a: &RegistrationAssertion) -> String {
-    let mut out = format!("Patient registered ({} registration)", a.class.as_str());
+    // The mark LEADS the twin. The twin is the one line legible on any build, forever
+    // (principle 11): a node too old to know the field still stores and shows this
+    // sentence, so it is where "this is not a real person" must be impossible to miss.
+    let who = if a.synthetic {
+        "SYNTHETIC patient registered — not a real person"
+    } else {
+        "Patient registered"
+    };
+    let mut out = format!("{who} ({} registration)", a.class.as_str());
     if let Some(basis) = a.basis {
         out.push_str(&format!("; basis: {basis}"));
     }
@@ -168,6 +190,7 @@ mod tests {
         let sys: Vec<(String, String)> = vec![("mrn".into(), "12345".into())];
         let a = RegistrationAssertion {
             class: RegistrationClass::Standard,
+            synthetic: false,
             basis: None,
             search: Some(SearchAttestationInput {
                 terms: SearchTerms {
@@ -195,6 +218,54 @@ mod tests {
         assert!(b.get("basis").is_none());
     }
 
+    /// ADR-0115: a real registration must not change by one byte because the mark exists,
+    /// and "real" has exactly one spelling, which is saying nothing.
+    #[test]
+    fn a_real_registration_carries_no_synthetic_key_at_all() {
+        let a = RegistrationAssertion {
+            class: RegistrationClass::Unidentified,
+            synthetic: false,
+            basis: Some("unconscious ED arrival, no ID"),
+            search: None,
+        };
+        let b = registration_assertion_body(&a);
+        assert!(b.get("synthetic").is_none());
+        // The whole payload, pinned: this is what every registration before ADR-0115 was.
+        assert_eq!(
+            b,
+            json!({ "class": "unidentified", "basis": "unconscious ED arrival, no ID" })
+        );
+        assert!(render_registration_twin(&a).starts_with("Patient registered ("));
+    }
+
+    /// The mark is independent of the class: each class can be of an invented patient.
+    #[test]
+    fn any_class_can_be_synthetic_and_the_twin_leads_with_it() {
+        for class in [
+            RegistrationClass::Unidentified,
+            RegistrationClass::Pseudonymous,
+        ] {
+            let a = RegistrationAssertion {
+                class,
+                synthetic: true,
+                basis: Some("training"),
+                search: None,
+            };
+            let b = registration_assertion_body(&a);
+            assert_eq!(b["synthetic"], true);
+            assert_eq!(
+                b["class"],
+                class.as_str(),
+                "the class is unchanged by the mark"
+            );
+            let twin = render_registration_twin(&a);
+            assert!(
+                twin.starts_with("SYNTHETIC patient registered — not a real person ("),
+                "a reader of the twin alone must see the mark first"
+            );
+        }
+    }
+
     #[test]
     fn an_empty_candidate_list_is_a_valid_search() {
         // The NORMAL case for a genuinely new patient: the search ran and correctly
@@ -203,6 +274,7 @@ mod tests {
         let toks = tokens();
         let a = RegistrationAssertion {
             class: RegistrationClass::Standard,
+            synthetic: false,
             basis: None,
             search: Some(SearchAttestationInput {
                 terms: SearchTerms {
@@ -230,6 +302,7 @@ mod tests {
         ] {
             let a = RegistrationAssertion {
                 class,
+                synthetic: false,
                 basis: Some("unidentified patient, no ID"),
                 search: None,
             };
@@ -249,6 +322,7 @@ mod tests {
         let toks = tokens();
         let a = RegistrationAssertion {
             class: RegistrationClass::Standard,
+            synthetic: false,
             basis: None,
             search: Some(SearchAttestationInput {
                 terms: SearchTerms {
@@ -283,6 +357,7 @@ mod tests {
         let toks = tokens();
         let a = RegistrationAssertion {
             class: RegistrationClass::Standard,
+            synthetic: false,
             basis: None,
             search: Some(SearchAttestationInput {
                 terms: SearchTerms {

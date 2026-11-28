@@ -101,6 +101,24 @@ BEGIN
     END IF;
     v_class := p ->> 'class';
 
+    -- 2a'. synthetic (ADR-0115) — the patient is invented. A fact of its own, not a class:
+    --      every class may be of a training patient. When the key is present it must be the
+    --      JSON boolean true. "Real" has ONE spelling, the key's absence; an explicit false,
+    --      a string or a null would be a second one, and two clients could then disagree
+    --      about what they had written.
+    --
+    --      LOCAL DOOR ONLY. A node on an older build knows nothing of this key and admits
+    --      any value under it (registration_tolerates_an_unknown_field.rs). Refusing at the
+    --      remote door what such a node already admitted would fork the event set, so a
+    --      malformed mark arriving from a peer is admitted and the projection below reads
+    --      it in the visible direction.
+    IF p ? 'synthetic'
+       AND (p -> 'synthetic') IS DISTINCT FROM 'true'::jsonb
+       AND current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on' THEN
+        RAISE EXCEPTION 'registration assertion: synthetic, when present, must be the JSON boolean true — a real patient''s registration omits it (ADR-0115), got %',
+            p -> 'synthetic';
+    END IF;
+
     IF v_class <> 'standard' THEN
         -- 2b. A non-standard registration STATES WHY. Unlike `standard` — where the class
         --     IS the explanation and a mandatory free-text box would be a required field
@@ -293,6 +311,14 @@ CREATE TABLE IF NOT EXISTS patient_registration (
     PRIMARY KEY (patient_id, content_address)
 );
 
+-- ADR-0115: the patient is invented. NOT part of the CREATE above, by the rule that comment
+-- states: this table exists on every node already, so a column added to the CREATE body
+-- would never reach one, and the apply function below would then fail at trigger depth on
+-- every registration (#207, guarded by migration_replay_widening.rs). DEFAULT false, so
+-- every registration applied before this column existed reads as of a real patient, which
+-- is what each of them was. Read ONLY through cairn_chart_synthetic (db/088).
+ALTER TABLE patient_registration ADD COLUMN IF NOT EXISTS synthetic BOOLEAN NOT NULL DEFAULT false;
+
 -- 5. Fold exactly one registration event into the retained set.
 --
 --    ADR-0052 §2 seal-robustness: a wrongly-sealed NON-clinical row holds CIPHERTEXT in
@@ -319,7 +345,8 @@ BEGIN
     IF e.sealed THEN RETURN; END IF;
     INSERT INTO patient_registration
         (patient_id, class, basis, displayed_count, search_incomplete,
-         registered_hlc_wall, registered_hlc_count, registered_origin, content_address)
+         registered_hlc_wall, registered_hlc_count, registered_origin, content_address,
+         synthetic)
     VALUES (
         e.patient_id,
         p ->> 'class',
@@ -331,8 +358,23 @@ BEGIN
         -- NULL when no search ran — the honest "not applicable", distinct from FALSE
         -- ("a search ran and it was complete").
         (p -> 'search' -> 'incomplete')::boolean,
-        e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address)
-    ON CONFLICT (patient_id, content_address) DO NOTHING;
+        e.hlc_wall, e.hlc_counter, e.node_origin, e.content_address,
+        -- ADR-0115. Marked when the key is present and is anything but an explicit false.
+        -- The local door admits only `true`, so this differs from "is true" only for a
+        -- malformed mark a peer delivered ("yes", 1, null). Such a registration was TRYING
+        -- to say the patient is invented, and of the two ways to be wrong about it, a band
+        -- on a chart is seen and a missing one is not. Never a cast: (x)::boolean on a JSON
+        -- string raises, and a raise here would wedge the sync watermark.
+        (p ? 'synthetic') AND (p -> 'synthetic') IS DISTINCT FROM 'false'::jsonb)
+    -- DO UPDATE, for this one column, and only ever towards the log. The PK includes the
+    -- content address, so a conflict is the SAME event applied again and every other column
+    -- is byte-for-byte what is already there (the comment above). But a row written by a
+    -- build that predates this column holds the DEFAULT, not what the event says; a
+    -- reprojection after the upgrade is how the mark reaches such a node, and DO NOTHING
+    -- would leave it false for ever.
+    ON CONFLICT (patient_id, content_address) DO UPDATE
+        SET synthetic = EXCLUDED.synthetic
+      WHERE patient_registration.synthetic IS DISTINCT FROM EXCLUDED.synthetic;
     RETURN;
 END;
 $$;
@@ -362,7 +404,9 @@ REVOKE EXECUTE ON FUNCTION patient_registration_apply(event_log) FROM PUBLIC;
 CREATE OR REPLACE VIEW patient_registration_current AS
 SELECT DISTINCT ON (patient_id)
     patient_id, class, basis, displayed_count, search_incomplete,
-    registered_hlc_wall, registered_hlc_count, registered_origin, content_address
+    registered_hlc_wall, registered_hlc_count, registered_origin, content_address,
+    -- ADR-0115. LAST, because CREATE OR REPLACE VIEW may only append columns.
+    synthetic
 FROM patient_registration
 ORDER BY patient_id,
          registered_hlc_wall ASC, registered_hlc_count ASC,

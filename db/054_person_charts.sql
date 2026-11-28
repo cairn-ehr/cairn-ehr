@@ -14,6 +14,9 @@ BEGIN;
 --    has never been linked (person_member has no row for a chart no linkage event touched;
 --    an unlinked chart that once had an edge maps to itself). Ordered for stable reads;
 --    callers canonicalise in Rust (ChartSet) regardless.
+-- ⚠️ SUPERSEDED ON REPLAY by db/088, which re-declares this function so a chart set never
+-- crosses the synthetic line (ADR-0115). The body below is the live one minus that single
+-- predicate; change BOTH, or the guard test named in db/088's header fails.
 CREATE OR REPLACE FUNCTION cairn_person_charts(p_patient uuid)
 RETURNS SETOF uuid
 LANGUAGE sql STABLE

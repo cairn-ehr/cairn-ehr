@@ -546,6 +546,12 @@ const SCHEMA: &[(&str, &str)] = &[
         "087_note_vouched_attesters",
         include_str!("../../../db/087_note_vouched_attesters.sql"),
     ),
+    // db/088 (#1219, ADR-0115): is a chart of a synthetic patient, and do two charts
+    // straddle that line. Re-declares db/016's veto and db/054's chart set to ask it.
+    (
+        "088_synthetic_patient",
+        include_str!("../../../db/088_synthetic_patient.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

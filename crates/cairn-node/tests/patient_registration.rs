@@ -188,6 +188,7 @@ async fn standard_registration_with_a_well_formed_search_is_accepted() {
     let identifiers: Vec<(String, String)> = vec![("mrn".into(), "12345".into())];
     let a = RegistrationAssertion {
         class: RegistrationClass::Standard,
+        synthetic: false,
         basis: None,
         search: Some(SearchAttestationInput {
             terms: SearchTerms {
@@ -624,6 +625,7 @@ async fn a_valid_unidentified_registration_is_accepted() {
     let p = Uuid::now_v7();
     let a = RegistrationAssertion {
         class: RegistrationClass::Unidentified,
+        synthetic: false,
         basis: Some("unconscious ED arrival, no ID"),
         search: None,
     };
@@ -673,6 +675,7 @@ async fn a_valid_pseudonymous_registration_is_accepted() {
     let p = Uuid::now_v7();
     let a = RegistrationAssertion {
         class: RegistrationClass::Pseudonymous,
+        synthetic: false,
         basis: Some("court-ordered protective care"),
         search: None,
     };

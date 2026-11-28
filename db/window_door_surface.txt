@@ -1,4 +1,4 @@
-# generation 87
+# generation 88
 col actor_current.actor_id
 col actor_current.kind
 col actor_current.pinned
@@ -642,6 +642,7 @@ col patient_registration.registered_hlc_count
 col patient_registration.registered_hlc_wall
 col patient_registration.registered_origin
 col patient_registration.search_incomplete
+col patient_registration.synthetic
 col patient_registration_current.basis
 col patient_registration_current.class
 col patient_registration_current.content_address
@@ -651,6 +652,7 @@ col patient_registration_current.registered_hlc_count
 col patient_registration_current.registered_hlc_wall
 col patient_registration_current.registered_origin
 col patient_registration_current.search_incomplete
+col patient_registration_current.synthetic
 col person_chart.demo_content_address
 col person_chart.demo_hlc_count
 col person_chart.demo_hlc_wall
@@ -745,6 +747,9 @@ fn cairn_chart_check_pending(uuid) -> boolean
 fn cairn_chart_set_doubts(uuid[]) -> TABLE(low uuid, high uuid, kind text, hlc_wall bigint)
 fn cairn_chart_set_has_doubted_link(uuid[]) -> boolean
 fn cairn_chart_set_unverified_links(uuid[]) -> TABLE(low uuid, high uuid, system text)
+fn cairn_chart_synthetic(uuid) -> text
+fn cairn_chart_synthetic_conflict(uuid) -> boolean
+fn cairn_charts_straddle_synthetic_line(uuid,uuid) -> boolean
 fn cairn_claim_authority(uuid,uuid) -> text
 fn cairn_clear_payload(event_log) -> jsonb
 fn cairn_clock_grade_is_ratified(text) -> boolean
