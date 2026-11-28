@@ -87,6 +87,9 @@ _PROJECTION_TABLES = [
     # stray row would leak into any test that counts what was queued. No FK references it,
     # and its one trigger (db/056's `match_enqueue`) is AFTER INSERT, which TRUNCATE never fires.
     "patient_chart",
+    # ADR-0115: where a chart's kind (synthetic / real) is read from. seed_registration writes
+    # it; a row left behind would turn a later test's unknown charts into real ones.
+    "patient_registration",
 ]
 
 
@@ -223,6 +226,26 @@ def seed_patient(
                 "VALUES (%s,%s,%s,%s,%s,NULL,NULL,'seed',0,0,'seed') ON CONFLICT DO NOTHING",
                 (patient_id, system, match_key, value, match_key),
             )
+    conn.commit()
+
+
+def seed_registration(conn, patient_id, *, synthetic):
+    """Give a chart a registration directly, so the floor can say what kind it is (ADR-0115).
+
+    A chart seeded with seed_patient alone has NO registration, and `cairn_chart_synthetic`
+    answers 'unknown' for it. This makes it 'synthetic' or 'real'. Bypasses the registration
+    door on purpose: the door and the mark are proven in
+    crates/cairn-node/tests/synthetic_patient.rs; these tests exercise what the matcher does
+    with the answer.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO patient_registration "
+            "(patient_id, class, displayed_count, registered_hlc_wall, registered_hlc_count, "
+            "registered_origin, content_address, synthetic) "
+            "VALUES (%s,'standard',0,0,0,'seed',%s,%s)",
+            (patient_id, _seed_content_address(str(patient_id), "registration"), synthetic),
+        )
     conn.commit()
 
 

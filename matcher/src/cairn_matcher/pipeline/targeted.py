@@ -41,6 +41,11 @@ from cairn_matcher.pipeline.blocking import (
 # imports psycopg, and this module is imported by the worker, `watch` and the CLI
 # (tests/test_pure_modules_import_without_psycopg.py).
 from cairn_matcher.pipeline.blocking_sql import _ANCHORED_RANGE_GROUPS_SQL, _GROUPS_SQL
+from cairn_matcher.pipeline.synthetic_line import (
+    load_kinds_for,
+    members_on_the_anchors_side,
+    sides,
+)
 from cairn_matcher.placeholder_uses import PLACEHOLDER_USES_PARAM
 
 # A block above this is non-discriminating even when paired linearly. KEPT at 1000 through two
@@ -103,20 +108,34 @@ def candidate_pairs_for(conn, patient, *, max_block_size=DEFAULT_TARGETED_CAP):
     skipped: list[tuple[str, str, int]] = []
     with conn.cursor() as cur:
         cur.execute(_TARGETED_GROUPS_SQL, (PLACEHOLDER_USES_PARAM, VALUE_SENTINELS_PARAM, me))
-        for pass_name, key, members in cur.fetchall():
-            require_registered(pass_name, SYMMETRIC_PASSES)
-            if len(members) > max_block_size:
-                skipped.append((pass_name, key, len(members)))
-            else:
-                pairs.update(pairs_with(me, members))
+        symmetric_rows = cur.fetchall()
         cur.execute(_TARGETED_RANGE_SQL, (me, VALUE_SENTINELS_PARAM, me, me))
-        for pass_name, anchor, members in cur.fetchall():
-            require_registered(pass_name, ANCHORED_PASSES)
-            size = len(members) + 1
-            if size > max_block_size:
-                skipped.append((pass_name, str(anchor), size))
-            elif str(anchor) == me:
-                pairs.update(pairs_with(me, members))      # my window: me x each member
+        anchored_rows = cur.fetchall()
+    # ADR-0115: this chart is never paired across the line between synthetic patients and real
+    # ones. Same rule, same helpers and same order (split, THEN cap) as the sweep, so the two
+    # ways of checking a chart cannot disagree about which pairs exist.
+    everyone = {me}
+    everyone |= {str(m) for _p, _k, members in symmetric_rows for m in members}
+    everyone |= {str(anchor) for _p, anchor, _m in anchored_rows}
+    everyone |= {str(m) for _p, _a, members in anchored_rows for m in members}
+    kinds = load_kinds_for(conn, everyone)
+    for pass_name, key, members in symmetric_rows:
+        require_registered(pass_name, SYMMETRIC_PASSES)
+        for label, side in sides(members, kinds):
+            if me not in {str(uuid.UUID(str(m))) for m in side}:
+                continue                                   # the half this chart is not in
+            if len(side) > max_block_size:
+                skipped.append((pass_name, key + label, len(side)))
             else:
-                pairs.add(canonical_pair(anchor, me))      # their window holds me: one pair
+                pairs.update(pairs_with(me, side))
+    for pass_name, anchor, members in anchored_rows:
+        require_registered(pass_name, ANCHORED_PASSES)
+        side = members_on_the_anchors_side(anchor, members, kinds)
+        size = len(side) + 1
+        if size > max_block_size:
+            skipped.append((pass_name, str(anchor), size))
+        elif str(anchor) == me:
+            pairs.update(pairs_with(me, side))             # my window: me x each member
+        elif me in {str(uuid.UUID(str(m))) for m in side}:
+            pairs.add(canonical_pair(anchor, me))          # their window holds me: one pair
     return sorted(pairs), skipped

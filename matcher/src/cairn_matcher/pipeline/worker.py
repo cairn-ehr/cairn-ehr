@@ -256,9 +256,14 @@ def drain(conn, settings: Settings, book: RetryBook, clock=time.monotonic,
                             type(exc).__name__, exc, exc_info=True)
             else:
                 swept = True
-                log.info("swept a backlog of %d charts: %d pairs, %d errors, %d blocks skipped",
-                         waiting, result.generated, len(result.errors),
-                         len(result.skipped_blocks))
+                # The proposals are reported with and without those between two synthetic
+                # charts (ADR-0115 decision 8): a loaded training cohort is built to contain
+                # duplicates, and must not be read as duplicates among real patients.
+                log.info("swept a backlog of %d charts: %d pairs, %d proposals (%d of them "
+                         "between synthetic patients), %d errors, %d blocks skipped",
+                         waiting, result.generated, result.auto_candidate + result.review,
+                         result.synthetic_auto_candidate + result.synthetic_review,
+                         len(result.errors), len(result.skipped_blocks))
         batch = queue_db.next_charts(conn, settings.batch, book.held(clock()))
         conn.rollback()
         if not batch:

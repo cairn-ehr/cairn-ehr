@@ -166,8 +166,17 @@
 > read time) and the CLI half of Task 4 with Task 6 (`patient-register --synthetic`; the cohort importer registers
 > every patient with it, checks the node SAID so, and holds a chart an earlier run left unmarked; its
 > "node holds nobody else" guard is gone). Measured: the 300-patient cohort loads as 300 synthetic charts.
-> **⇒ next on this thread, in the plan's order:** Task 3 (the matcher and db/017 never propose a cross-line pair;
-> today only the hard veto stops them), then the window half of Task 4 with Task 5 (the band, the row marks, and the
+> **Task 3 is built (2026-11-28, fifth PR of the day):** the matcher never proposes a pair across the line and
+> still proposes two synthetic charts to each other. `matcher/.../pipeline/synthetic_line.py` is the one home:
+> every blocking group is split along the line BEFORE the block-size cap (so a loaded cohort cannot push a group of
+> real patients over the cap and cost them their duplicate check), `runner.assess` gives no band to a pair the
+> floor's veto says crosses (which also retracts a proposal written while one chart's registration was in transit),
+> and `SweepResult` counts its yield with and without pairs between two synthetic charts. A chart of UNKNOWN kind
+> pairs with both sides. Under it, a trigger on `match_proposal` (db/088 section 5, in place, no new generation)
+> refuses such a row from any client and lets an existing one only be closed (`retracted`/`rejected`/`review`).
+> **Gap, stated:** `match_proposal_open` (db/057) still shows a stale cross-line row until the matcher's next check
+> retracts it; the view was not changed.
+> **⇒ next on this thread, in the plan's order:** the window half of Task 4 with Task 5 (the band, the row marks, and the
 > **window-floor raise** owed since generation 88). `register-john-doe --synthetic` is not built. Nothing in the
 > window SHOWS the mark yet. **`patient-search` and `patient-register` do** (2026-11-28, third PR of the
 > day): a search candidate carries `kind` (`synthetic` / `real` / `unknown`, default `unknown` so an older build's

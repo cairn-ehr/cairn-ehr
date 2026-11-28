@@ -23,6 +23,14 @@ from cairn_matcher.pipeline.blocking import (
 )
 from cairn_matcher.pipeline.blocking_sql import _GROUPS_SQL, _RANGE_GROUPS_SQL
 from cairn_matcher.pipeline.queue_db import AWAITING_HUMAN
+
+# load_kinds_for lives in the psycopg-free synthetic_line module (the per-chart check needs it
+# and must import without psycopg); re-exported here beside the other batch loaders.
+from cairn_matcher.pipeline.synthetic_line import (
+    load_kinds_for,
+    members_on_the_anchors_side,
+    sides,
+)
 from cairn_matcher.placeholder_uses import PLACEHOLDER_USES_PARAM
 from cairn_matcher.records import CandidateRecord
 
@@ -223,34 +231,49 @@ def generate_candidate_pairs(
     # set: an unregistered (or registered-but-misplaced) SQL arm would otherwise be
     # silently filtered by the `enabled` check on every run (a pass that looks built but
     # contributes zero pairs) — or silently skipped with the wrong statement.
+    symmetric_rows: list = []
+    anchored_rows: list = []
     with conn.cursor() as cur:
         if enabled & SYMMETRIC_PASSES:
             # Two binds now: _PLACEHOLDER_USES_PARAM for name_tokens (first, appears first),
             # VALUE_SENTINELS_PARAM for blocking_sex (second) -- the name+sex arm's sex source.
             cur.execute(_GROUPS_SQL, (_PLACEHOLDER_USES_PARAM, VALUE_SENTINELS_PARAM))
-            for pass_name, key, members in cur.fetchall():
-                if require_registered(pass_name, SYMMETRIC_PASSES) not in enabled:
-                    continue
-                size = len(members)
-                if size > max_block_size:
-                    skipped_blocks.append((pass_name, key, size))
-                else:
-                    pairs.update(_pairs_from_members(members))
+            symmetric_rows = [
+                row for row in cur.fetchall()
+                if require_registered(row[0], SYMMETRIC_PASSES) in enabled
+            ]
         if enabled & ANCHORED_PASSES:
-            # The anchored range passes: pairs are anchor x member ONLY. The cap counts
-            # the WHOLE block (members + the anchor itself) so "block size" means the
-            # same thing for both pair-generation shapes, and a skipped block is
-            # reported under the anchor's uuid (its natural key). The %s binds the
+            # The anchored range passes: pairs are anchor x member ONLY. The %s binds the
             # uncertainty-sentinel exclusion in the blocking_sex CTE.
             cur.execute(_RANGE_GROUPS_SQL, (VALUE_SENTINELS_PARAM,))
-            for pass_name, anchor, members in cur.fetchall():
-                if require_registered(pass_name, ANCHORED_PASSES) not in enabled:
-                    continue
-                size = len(members) + 1
-                if size > max_block_size:
-                    skipped_blocks.append((pass_name, str(anchor), size))
-                else:
-                    pairs.update(pairs_from_anchor(anchor, members))
+            anchored_rows = [
+                row for row in cur.fetchall()
+                if require_registered(row[0], ANCHORED_PASSES) in enabled
+            ]
+    # ADR-0115: no pair is generated across the line between synthetic patients and real ones.
+    # The kinds of every chart in any group are read once, and each group is split along the
+    # line BEFORE the cap below is applied (see pipeline.synthetic_line for why before).
+    everyone = {m for _p, _k, members in symmetric_rows for m in members}
+    everyone |= {anchor for _p, anchor, _m in anchored_rows}
+    everyone |= {m for _p, _a, members in anchored_rows for m in members}
+    kinds = load_kinds_for(conn, everyone)
+    for pass_name, key, members in symmetric_rows:
+        for label, side in sides(members, kinds):
+            size = len(side)
+            if size > max_block_size:
+                skipped_blocks.append((pass_name, key + label, size))
+            else:
+                pairs.update(_pairs_from_members(side))
+    for pass_name, anchor, members in anchored_rows:
+        # The cap counts the WHOLE block (members + the anchor itself) so "block size" means
+        # the same thing for both pair-generation shapes, and a skipped block is reported
+        # under the anchor's uuid (its natural key).
+        side = members_on_the_anchors_side(anchor, members, kinds)
+        size = len(side) + 1
+        if size > max_block_size:
+            skipped_blocks.append((pass_name, str(anchor), size))
+        else:
+            pairs.update(pairs_from_anchor(anchor, side))
     return sorted(pairs), skipped_blocks
 
 

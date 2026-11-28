@@ -140,12 +140,31 @@ Tests first: `tests/synthetic_link_line.rs` (DB-gated), the matrix below, each c
 
 Tests first, in `matcher/tests` and `tests/match_proposal*.rs`.
 
-- [ ] Candidate-pair generation excludes straddling pairs, in the one SQL it runs; a proposal for one
-      submitted by another client is refused at db/017.
-- [ ] Two synthetic charts are still proposed and still linkable: duplicate-repair training needs it.
-      A test holds this, because the easy implementation excludes anything synthetic.
-- [ ] The duplicate sweep's yield (its miss-rate metric, ADR-0014) is reported with and without
-      synthetic pairs (ADR-0115 decision 8).
+- [x] Candidate-pair generation excludes straddling pairs. **Differs from this line as first
+      written:** not "in the one SQL it runs". The nine blocking passes return GROUPS, and the pairs
+      are made in Python, so the split is there: `pipeline/synthetic_line.py` (`sides`,
+      `members_on_the_anchors_side`), used by both `db.generate_candidate_pairs` and
+      `targeted.candidate_pairs_for`. A group is split BEFORE the block-size cap. Filtering pairs
+      after the cap would have let a loaded cohort push a group of real patients over the cap and
+      silently cost them their duplicate check; `test_synthetic_charts_do_not_push_a_real_block_over_the_cap`.
+- [x] `runner.assess` gives no band to a pair the floor's veto says crosses the line: the one place
+      every caller passes through, including one that names its own pairs. It is NOT sent to REVIEW
+      as every other hard veto is, because no human can accept it. `persist` then retracts a
+      proposal written while one chart's registration was in transit.
+- [x] A proposal for one submitted by another client is refused at the table: a trigger on
+      `match_proposal`, in db/088 section 5 (db/017 has no door). An existing row found to cross may
+      only be closed (`retracted`, `rejected`, `review`). `tests/synthetic_patient.rs`.
+- [x] Two synthetic charts are still proposed and still linkable: duplicate-repair training needs it.
+      Tests hold this at each of the three layers, because the easy implementation excludes anything
+      synthetic.
+- [x] A chart of unknown kind (registration not held here) pairs with both sides. Not in this plan as
+      first written, and it is the offline-first case: folding it into either side is a guess.
+- [x] The duplicate sweep's yield (its miss-rate metric, ADR-0014) is reported with and without
+      synthetic pairs (ADR-0115 decision 8): `SweepResult.synthetic_generated`,
+      `.synthetic_auto_candidate`, `.synthetic_review`, `.real_yield()`, and the worker's sweep log line.
+- [ ] **Not done:** `match_proposal_open` (db/057) still shows a row that came to cross the line until
+      the matcher's next check of either chart retracts it. The human who opens it is refused at the
+      link door with the reason. Hiding it in the view needs db/057's view re-declared in db/088.
 
 ## Task 4 — the doors that set the mark (CLI, the window's funnel, the terminal service)
 

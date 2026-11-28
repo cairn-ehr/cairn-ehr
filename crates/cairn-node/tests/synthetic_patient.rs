@@ -439,6 +439,111 @@ async fn a_link_across_the_line_is_refused_locally_even_when_a_human_attests_it(
     assert_eq!(person_charts(&c, invented).await, [invented.to_string()]);
 }
 
+/// Write a `match_proposal` row for the pair as a client other than the matcher would: raw SQL
+/// on the advisory worklist table, which has no submit door (db/017).
+async fn insert_proposal(c: &Client, a: Uuid, b: Uuid) -> Result<u64, tokio_postgres::Error> {
+    let (a, b) = (a.to_string(), b.to_string());
+    c.execute(
+        "INSERT INTO match_proposal (patient_low, patient_high, score_total, band, \
+                                     veto_findings, evidence, matcher_version) \
+         VALUES (LEAST($1::text::uuid, $2::text::uuid), GREATEST($1::text::uuid, $2::text::uuid), \
+                 1.0, 'review', '[]', '[]', 'some-other-client')",
+        &[&a, &b],
+    )
+    .await
+}
+
+async fn set_proposal_status(
+    c: &Client,
+    a: Uuid,
+    b: Uuid,
+    status: &str,
+) -> Result<u64, tokio_postgres::Error> {
+    let (a, b) = (a.to_string(), b.to_string());
+    c.execute(
+        "UPDATE match_proposal SET status = $3 \
+          WHERE patient_low = LEAST($1::text::uuid, $2::text::uuid) \
+            AND patient_high = GREATEST($1::text::uuid, $2::text::uuid)",
+        &[&a, &b, &status],
+    )
+    .await
+}
+
+/// The matcher leaves a pair across the line out for itself (matcher/tests/
+/// test_synthetic_line_pipeline.py). The worklist table is the floor under that: db/017 has no
+/// door, so the refusal is on the table, and it holds against a client that is not the matcher.
+#[tokio::test]
+async fn the_worklist_refuses_a_proposal_across_the_line_from_any_client() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = open(&base).await;
+    c.batch_execute("TRUNCATE match_proposal").await.unwrap();
+    let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
+    let invented = register(&c, &sk_a, &kid_a, true).await;
+    let other_invented = register(&c, &sk_a, &kid_a, true).await;
+    let person = register(&c, &sk_a, &kid_a, false).await;
+
+    let err = insert_proposal(&c, invented, person)
+        .await
+        .expect_err("a proposal across the line is refused");
+    let msg = db_msg(&err);
+    assert!(msg.contains("synthetic"), "{msg}");
+    assert!(
+        msg.contains("ADR-0115"),
+        "the refusal must say where the rule is: {msg}"
+    );
+
+    // Two invented charts are proposed like any pair: duplicate-repair training needs it.
+    assert_eq!(
+        insert_proposal(&c, invented, other_invented).await.unwrap(),
+        1
+    );
+    c.batch_execute("TRUNCATE match_proposal").await.unwrap();
+}
+
+/// Offline-first: a proposal is written while one chart's registration is still in transit and
+/// its kind unknown. When the registration arrives and the pair turns out to cross the line,
+/// the row may be CLOSED (the matcher retracts it, a human rejects it, auto-apply sends it to
+/// review) and may never be moved toward a link.
+#[tokio::test]
+async fn a_proposal_found_to_cross_the_line_can_be_closed_and_never_advanced() {
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = open(&base).await;
+    c.batch_execute("TRUNCATE match_proposal").await.unwrap();
+    let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
+    let person = register(&c, &sk_a, &kid_a, false).await;
+
+    // A chart this node holds no registration for: 'unknown', so the proposal is admitted.
+    let late = Uuid::now_v7();
+    assert_eq!(chart_synthetic(&c, late).await, "unknown");
+    assert_eq!(insert_proposal(&c, late, person).await.unwrap(), 1);
+
+    // Its registration arrives from a peer, marked synthetic.
+    let signed = registration(&sk_a, &kid_a, late, true, 50, |_| {});
+    c.execute("SELECT apply_remote_event($1)", &[&signed])
+        .await
+        .unwrap();
+    assert_eq!(chart_synthetic(&c, late).await, "synthetic");
+
+    for advancing in ["pending", "accepted", "applied", "auto_applied"] {
+        let err = set_proposal_status(&c, late, person, advancing)
+            .await
+            .expect_err("a proposal across the line is never advanced");
+        assert!(db_msg(&err).contains("synthetic"), "{advancing}");
+    }
+    for closing in ["review", "rejected", "retracted"] {
+        assert_eq!(
+            set_proposal_status(&c, late, person, closing)
+                .await
+                .unwrap(),
+            1,
+            "{closing} must stay possible, or a stale row could never leave the worklist"
+        );
+    }
+    c.batch_execute("TRUNCATE match_proposal").await.unwrap();
+}
+
 /// Duplicate-repair training needs two invented charts that can be linked. The lazy
 /// implementation refuses anything synthetic; this is the test that it does not.
 #[tokio::test]
