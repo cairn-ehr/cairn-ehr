@@ -290,6 +290,13 @@ jobs:
       - name: scripts/measure_patient_search.py pure tests
         run: python3 scripts/tests/measure_patient_search_test.py
 
+      # The synthetic-cohort importer (#1214). What it must never get wrong is decided in pure
+      # functions and tested against a stand-in node: it reads only a file marked synthetic,
+      # a second run writes nothing twice, and it never passes the registration funnel on its
+      # own. None of that needs a database, so it runs here, ahead of the extension build.
+      - name: scripts/import_synthetic_cohort.py pure tests
+        run: python3 scripts/tests/import_synthetic_cohort_test.py
+
       # The step-3 prompt rig (ADR-0075, #687): its --self-test pins the Python twins of
       # `cairn_patient_search::rank` to the Rust unit tests' own examples. Every ranking figure in
       # the ADR and its results file is computed by those twins, so a Rust ranking change that
