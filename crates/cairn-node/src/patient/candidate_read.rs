@@ -9,7 +9,7 @@
 
 use super::person;
 use super::search_person::{display_name_for, trust_state_for};
-use cairn_patient_search::{age_years, Age, Candidate};
+use cairn_patient_search::{age_years, Age, Candidate, PatientKind};
 use std::collections::{HashMap, HashSet};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
@@ -25,6 +25,9 @@ pub struct DisplayFacts {
     last_activity: HashMap<Uuid, String>,
     locales: HashMap<Uuid, String>,
     photo_refs: HashMap<Uuid, String>,
+    /// ADR-0115: synthetic, real, or not known here. A chart absent from this map is
+    /// `Unknown` (the type's default), never `Real`.
+    kinds: HashMap<Uuid, PatientKind>,
 }
 
 /// Run every display read for `ids` (the query count the search path was budgeted for, §5.11:
@@ -58,6 +61,7 @@ pub async fn read_display_facts<C: GenericClient + Sync>(
         last_activity: read_last_activity(client, ids).await?,
         locales: read_locale(client, ids).await?,
         photo_refs: read_photo_refs(client, ids).await?,
+        kinds: read_kinds(client, ids).await?,
     })
 }
 
@@ -83,6 +87,7 @@ impl DisplayFacts {
         let unreadable = name.is_unreadable();
         (
             Candidate {
+                kind: self.kinds.get(&id).copied().unwrap_or_default(),
                 patient_id: id,
                 display_name: name.text(),
                 age,
@@ -204,6 +209,25 @@ async fn read_dob<C: GenericClient + Sync>(
 /// suites' helper) reads. What a MISSING row means depends on whether the chart is held here
 /// (`confirmed` if so, `unknown` if not): the caller applies `search_person::trust_state_for`
 /// rather than this function inventing a fabricated row for it.
+/// What the floor says each chart is (ADR-0115). ONE question, asked of the one function
+/// that answers it (`cairn_chart_synthetic`, db/088); this module never reads the
+/// registration's column for itself. One round trip for the whole list, like every other
+/// display read here, so the search stays inside its latency budget (§5.11).
+async fn read_kinds<C: GenericClient + Sync>(
+    client: &C,
+    ids: &[Uuid],
+) -> anyhow::Result<HashMap<Uuid, PatientKind>> {
+    let id_strs: Vec<String> = ids.iter().map(Uuid::to_string).collect();
+    let sql = "SELECT id::text AS patient_id, cairn_chart_synthetic(id) AS kind \
+               FROM unnest($1::text[]::uuid[]) AS id";
+    let mut out = HashMap::new();
+    for row in client.query(sql, &[&id_strs]).await? {
+        let id: Uuid = row.get::<_, String>("patient_id").parse()?;
+        out.insert(id, PatientKind::from_floor(&row.get::<_, String>("kind")));
+    }
+    Ok(out)
+}
+
 async fn read_trust_states<C: GenericClient + Sync>(
     client: &C,
     ids: &[Uuid],

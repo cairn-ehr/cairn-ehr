@@ -236,6 +236,7 @@ mod tests {
 
     fn cand(n: u128) -> Candidate {
         Candidate {
+            kind: crate::PatientKind::Real,
             patient_id: id(n),
             display_name: format!("Person {n}"),
             age: None,

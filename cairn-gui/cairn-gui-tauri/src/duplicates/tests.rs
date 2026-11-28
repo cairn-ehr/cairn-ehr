@@ -24,6 +24,7 @@ async fn a_shown_chart_is_admitted_by_its_list() {
     state.shown.lock().await.insert(
         other,
         Candidate {
+            kind: cairn_patient_search::PatientKind::Real,
             patient_id: other,
             display_name: "Other Person".into(),
             age: None,

@@ -607,6 +607,7 @@ mod tests {
 
     fn candidate(id: Uuid) -> Candidate {
         Candidate {
+            kind: cairn_patient_search::PatientKind::Real,
             patient_id: id,
             display_name: "Some One".into(),
             age: None,

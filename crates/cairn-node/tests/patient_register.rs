@@ -38,6 +38,7 @@ const EXTRA_TABLES: [&str; 1] = ["patient_registration"];
 /// attestation; the display fields are filler so the struct is easy to construct per test.
 fn candidate(id: Uuid) -> Candidate {
     Candidate {
+        kind: cairn_patient_search::PatientKind::Real,
         patient_id: id,
         display_name: "Some One".into(),
         age: None,

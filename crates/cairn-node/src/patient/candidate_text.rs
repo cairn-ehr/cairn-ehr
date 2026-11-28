@@ -5,7 +5,7 @@
 //! `println!` loop, so the exact output can be pinned by a golden test: this is a
 //! wrong-chart-prevention surface and a column that shifts silently is a defect a clerk acts on.
 
-use cairn_patient_search::CandidateList;
+use cairn_patient_search::{CandidateList, PatientKind};
 
 /// Width of the `name` column in `candidate_lines`' fixed-column layout. Both the header's
 /// `{:<name_w$}` and `ellipsize`'s ceiling read from here so the two can never drift apart.
@@ -50,6 +50,32 @@ const LINKED_PREFIX: &str = "\u{21b3} linked: ";
 /// moves, but a longer prefix would truncate the very name being doubted ("Mary SM..."), and
 /// that name is what the clerk most needs whole.
 const DOUBTED_PREFIX: &str = "\u{21b3} in doubt: ";
+
+/// The mark for a chart of an invented patient (ADR-0115), LEADING the name cell.
+///
+/// Spelled out, at the cost of twelve of the cell's twenty-eight characters. A synthetic row
+/// must be impossible to take for a person's, and the reader is a clerk scanning a list for a
+/// name: an abbreviation is what gets scanned past. The name is ellipsized to make room; the
+/// chart id beside it is whole, and that is what identifies the chart.
+const SYNTHETIC_PREFIX: &str = "[SYNTHETIC] ";
+
+/// The mark for a chart whose registration this node does not hold, so it cannot say whether
+/// the patient is invented. Never drawn as an ordinary row: "not known" is not "real"
+/// (principle 4). Short, because the row is otherwise an ordinary candidate.
+const UNKNOWN_KIND_PREFIX: &str = "[unregistered here] ";
+
+/// The name cell's text for a chart: its kind first, then whatever the caller built
+/// (the plain name, or one already marked as linked or in doubt). **Pure.**
+///
+/// The kind leads EVERY other prefix, so that after ellipsizing it is the part that
+/// survives: "[SYNTHETIC] ↳ linked: Jo…" still says the one thing that must be read.
+pub fn name_with_kind(kind: PatientKind, name: &str) -> String {
+    match kind {
+        PatientKind::Synthetic => format!("{SYNTHETIC_PREFIX}{name}"),
+        PatientKind::Unknown => format!("{UNKNOWN_KIND_PREFIX}{name}"),
+        PatientKind::Real => name.to_string(),
+    }
+}
 
 /// One chart's fixed-column line, with `name` (already prefixed if linked) in the name cell.
 /// **Pure.**
@@ -123,7 +149,7 @@ pub fn candidate_lines(list: &CandidateList) -> Vec<String> {
                     };
                     format!("{prefix}{}", c.display_name)
                 };
-                out.push(chart_line(c, &name));
+                out.push(chart_line(c, &name_with_kind(c.kind, &name)));
             }
         }
     }
@@ -151,6 +177,7 @@ mod tests {
     /// A candidate with every optional column set.
     fn full(n: u128, name: &str) -> Candidate {
         Candidate {
+            kind: cairn_patient_search::PatientKind::Real,
             patient_id: id(n),
             display_name: name.to_string(),
             age: Some(Age {
@@ -167,6 +194,7 @@ mod tests {
     /// A candidate with none of the optional columns.
     fn bare(n: u128, name: &str) -> Candidate {
         Candidate {
+            kind: cairn_patient_search::PatientKind::Real,
             patient_id: id(n),
             display_name: name.to_string(),
             age: None,
@@ -214,6 +242,65 @@ mod tests {
                 "00000000-0000-7000-8000-00000000000b  Doe                              ?  unconfirmed   -             -".to_string(),
             ]
         );
+    }
+
+    /// ADR-0115: a synthetic chart's row says so FIRST, and no column moves because of it.
+    #[test]
+    fn a_synthetic_chart_is_marked_at_the_front_of_its_name_cell() {
+        let mut invented = full(1, "Ada Training");
+        invented.kind = PatientKind::Synthetic;
+        let list = CandidateList {
+            people: PersonRow::each_alone(vec![invented, full(2, "Bo Real")]),
+            incomplete: false,
+            incomplete_reason: None,
+        };
+        let lines = candidate_lines(&list);
+        assert!(
+            lines[1].contains("  [SYNTHETIC] Ada Training"),
+            "the mark leads the name cell: {}",
+            lines[1]
+        );
+        assert!(
+            !lines[2].contains('['),
+            "a real patient's row carries no mark: {}",
+            lines[2]
+        );
+        // The columns after the name start where they always did, on every row.
+        let age_at = |line: &str| {
+            line.char_indices()
+                .nth(36 + 2 + NAME_COLUMN_WIDTH)
+                .map(|x| x.0)
+        };
+        assert_eq!(age_at(&lines[1]), age_at(&lines[2]));
+        assert_eq!(lines[1].chars().count(), lines[2].chars().count());
+    }
+
+    /// The mark survives a long name: the NAME is what is cut, never the mark.
+    #[test]
+    fn a_long_synthetic_name_loses_its_tail_and_keeps_its_mark() {
+        let cell = ellipsize(
+            &name_with_kind(PatientKind::Synthetic, "Bartholomew Featherstonehaugh"),
+            NAME_COLUMN_WIDTH,
+        );
+        assert!(cell.starts_with("[SYNTHETIC] Bartholomew"), "{cell}");
+        assert!(cell.ends_with('…'));
+        assert_eq!(cell.chars().count(), NAME_COLUMN_WIDTH);
+    }
+
+    /// A chart whose registration is not held here is NOT drawn as an ordinary row.
+    #[test]
+    fn a_chart_of_unknown_kind_is_never_drawn_as_a_real_one() {
+        assert_eq!(
+            name_with_kind(PatientKind::Unknown, "Cy Somewhere"),
+            "[unregistered here] Cy Somewhere"
+        );
+        assert_eq!(
+            name_with_kind(PatientKind::Real, "Cy Somewhere"),
+            "Cy Somewhere"
+        );
+        // The kind leads every other mark, so it is what survives the cut.
+        let linked = format!("{LINKED_PREFIX}Jo Smith");
+        assert!(name_with_kind(PatientKind::Synthetic, &linked).starts_with("[SYNTHETIC] "));
     }
 
     #[test]

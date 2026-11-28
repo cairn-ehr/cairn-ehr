@@ -336,6 +336,38 @@ async fn a_reprojection_rebuilds_the_mark_from_the_log() {
     assert_eq!(chart_synthetic(&c, invented).await, "synthetic");
 }
 
+/// What a clerk is shown. A search candidate carries the chart's kind, read through the one
+/// function that knows, so every surface built on a candidate can mark it (plan Task 5).
+#[tokio::test]
+async fn a_search_candidate_says_what_kind_of_chart_it_is() {
+    use cairn_patient_search::PatientKind;
+    let Some(base) = cs() else { return };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = open(&base).await;
+    let (sk, kid, _, _) = setup(&c).await;
+    let invented = register(&c, &sk, &kid, true).await;
+    let person = register(&c, &sk, &kid, false).await;
+    let not_held_here = Uuid::now_v7();
+
+    let shown = cairn_node::patient::candidate_read::candidates_by_id(
+        &c,
+        &[invented, person, not_held_here],
+        "2026-11-28",
+    )
+    .await
+    .unwrap();
+    let kinds: Vec<PatientKind> = shown.iter().map(|x| x.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            PatientKind::Synthetic,
+            PatientKind::Real,
+            PatientKind::Unknown
+        ],
+        "a chart whose registration is not held here is Unknown, never Real"
+    );
+}
+
 // ---------------------------------------------------------------------------------------
 // The line
 // ---------------------------------------------------------------------------------------

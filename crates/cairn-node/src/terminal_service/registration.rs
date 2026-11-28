@@ -331,6 +331,7 @@ mod tests {
         let candidates = ids
             .iter()
             .map(|&patient_id| Candidate {
+                kind: cairn_patient_search::PatientKind::Real,
                 patient_id,
                 display_name: "someone".into(),
                 age: None,
