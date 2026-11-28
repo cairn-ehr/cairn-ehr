@@ -1986,6 +1986,13 @@ enum Cmd {
         /// prints them: a funnel that auto-proceeds past near-matches is not a funnel.
         #[arg(long)]
         confirm_new: bool,
+        /// Register an INVENTED patient: a training or test chart, not a real person
+        /// (ADR-0115). The chart is marked for its whole life and the mark CANNOT be
+        /// changed afterwards; it can never be linked to a chart of a real person. Never
+        /// use this for a real patient, however little is known about them (that is
+        /// `register-john-doe`).
+        #[arg(long)]
+        synthetic: bool,
     },
 
     /// Record demographics a registration does not: the patient's sex, gender, address, or a
@@ -4698,6 +4705,7 @@ async fn run() -> anyhow::Result<()> {
             birth_date,
             identifiers,
             confirm_new,
+            synthetic,
         } => {
             let identifiers = parse_identifier_pairs(&identifiers)?;
             // Fail cheap, before any I/O (same discipline as `parse_identifier_pairs` above,
@@ -4772,23 +4780,40 @@ async fn run() -> anyhow::Result<()> {
             // unconditionally: the orchestrator itself treats a blank/empty string the same
             // as `None` (principle 4 — an empty `--name` default must never assert an
             // empty-string name), so no pre-filtering is needed here.
-            let recorded = cairn_node::patient::register::register_patient_returning_event(
-                &mut db,
-                &sk,
-                &kid,
-                &id.node_id_hex,
-                Some(name.as_str()),
-                &query,
-                &list,
-            )
-            .await?;
-            println!(
-                "{}",
-                cairn_node::patient::register::registered_patient_lines(
-                    recorded.value,
-                    recorded.event_id
+            // Two named functions and no shared `bool` argument: see
+            // `register_synthetic_patient_returning_event` for why the mark is not a flag here.
+            use cairn_node::patient::register as reg;
+            if synthetic {
+                let recorded = reg::register_synthetic_patient_returning_event(
+                    &mut db,
+                    &sk,
+                    &kid,
+                    &id.node_id_hex,
+                    Some(name.as_str()),
+                    &query,
+                    &list,
                 )
-            );
+                .await?;
+                println!(
+                    "{}",
+                    reg::registered_synthetic_patient_lines(recorded.value, recorded.event_id)
+                );
+            } else {
+                let recorded = reg::register_patient_returning_event(
+                    &mut db,
+                    &sk,
+                    &kid,
+                    &id.node_id_hex,
+                    Some(name.as_str()),
+                    &query,
+                    &list,
+                )
+                .await?;
+                println!(
+                    "{}",
+                    reg::registered_patient_lines(recorded.value, recorded.event_id)
+                );
+            }
         }
         Cmd::PatientDemographics {
             patient,

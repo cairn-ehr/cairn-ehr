@@ -22,10 +22,11 @@ measured cost of having no bulk door (#1212).
 * **Read a file that does not say it is synthetic.** The cohort's identifiers are valid in
   form (an IHI, a Medicare number), so the marker inside the file is the only thing that
   tells it from a real extract. No marker, no import.
-* **Write into a node that holds anyone else's charts.** Cairn cannot yet mark a chart or a
-  node as test data (#1207). Until it can, this script refuses a node holding any chart that
-  does not carry a cohort record number. This is a guard in a script, not a floor: it stops
-  the honest mistake and nothing else. NEVER peer a node this has written to with a real one.
+* **Register an unmarked patient.** Every cohort patient is registered with
+  `patient-register --synthetic` (ADR-0115), so the chart says "not a real person" for its
+  whole life and can never be linked to a real one. A `cairn-node` too old to know the flag
+  is refused before anything is written, and so is a chart an earlier, pre-mark run of this
+  script left unmarked: that database is loaded again from empty.
 * **Register past a displayed candidate on its own.** When the funnel shows existing charts
   for a patient, a person is meant to look at them. By default the patient is HELD and
   counted. `--register-past-candidates` registers anyway; the registration then attests a
@@ -58,7 +59,7 @@ advisory login (`cairn_agent`) may not read the node's identity or the actor reg
 (measured 2026-11-28). The events still pass through `submit_event` and are checked by it;
 what the owner's login does not prove is that an unprivileged client could have made them.
 
-Requires only the Python standard library, `psql` on PATH (for the one read the guard makes)
+Requires only the Python standard library, `psql` on PATH (for two reads no `cairn-node` verb offers)
 and a provisioned node (`cairn-node init`). Pure functions are tested in
 `scripts/tests/import_synthetic_cohort_test.py`.
 """
@@ -95,8 +96,8 @@ IHI_URI = "http://ns.electronichealth.net.au/id/hi/ihi/1.0"
 MEDICARE_URI = "http://ns.electronichealth.net.au/id/medicare-number"
 MRN_URI = "urn:synthetichealthdata:patient"
 CAIRN_SYSTEMS = {IHI_URI: "ihi-au", MEDICARE_URI: "medicare-au"}
-# Every cohort record number is recorded under a system with this prefix. The guard reads it
-# to tell this script's charts from anyone else's.
+# Every cohort record number is recorded under a system with this prefix, so a chart this
+# script made can always be found again by it.
 MRN_SYSTEM_PREFIX = "mrn-shd-"
 
 DRUGREF_MOIETY = "drugref-moiety"
@@ -314,6 +315,8 @@ def register_argv(patient: Patient, system_for_mrn: str, *, confirm_new: bool) -
     ]
     for identifier in cairn_identifiers(patient, system_for_mrn)[0]:
         argv += ["--identifier", identifier]
+    # ALWAYS. This script loads invented people and nothing else (ADR-0115).
+    argv.append("--synthetic")
     if confirm_new:
         argv.append("--confirm-new")
     return argv
@@ -390,6 +393,18 @@ def parse_registered(stdout: str) -> str | None:
     return m.group(1) if m else None
 
 
+def says_synthetic(stdout: str) -> bool:
+    """Whether a registration's output carries the line `cairn-node` prints for a synthetic
+    patient. Checked after every registration: asking for the mark and getting it are two
+    facts, and only the second one is on the chart."""
+    return any(line.startswith("SYNTHETIC patient") for line in stdout.splitlines())
+
+
+def knows_synthetic(help_text: str) -> bool:
+    """Whether this `cairn-node` can register a synthetic patient, read from its own help."""
+    return "--synthetic" in help_text
+
+
 def parse_recorded_thread(stdout: str) -> str | None:
     m = _RECORDED.search(stdout)
     return m.group(1) if m else None
@@ -442,6 +457,17 @@ def nothing_yet(chart: str) -> frozenset[str]:
     return frozenset()
 
 
+Kind = Callable[[str], str]
+"""What the node says a chart is: `synthetic`, `real` or `unknown` (`cairn_chart_synthetic`,
+db/088). Injected like the rest. Asked only about a chart that existed before this run."""
+
+SYNTHETIC = "synthetic"
+
+
+def marked_synthetic(chart: str) -> str:
+    return SYNTHETIC
+
+
 @dataclass
 class Report:
     cohort_tag: str = ""
@@ -491,7 +517,9 @@ def _refusal(stderr: str) -> str:
     return (what or (lines[0] if lines else ""))[:300]
 
 
-def _chart_for(patient: Patient, system_for_mrn: str, run: Run, opts: Options, report: Report):
+def _chart_for(
+    patient: Patient, system_for_mrn: str, run: Run, opts: Options, report: Report, kind: Kind
+):
     """Find or register the patient's chart. Returns (chart id or None, was it there before)."""
     found = run(search_argv(patient, system_for_mrn))
     if found.returncode != 0:
@@ -502,6 +530,20 @@ def _chart_for(patient: Patient, system_for_mrn: str, run: Run, opts: Options, r
         return None, False
     charts = parse_candidates(found.stdout)
     if len(charts) == 1:
+        found_as = kind(charts[0])
+        if found_as != SYNTHETIC:
+            # A chart this script made before patients could be marked (or one whose
+            # registration is not held here). Adding to it would grow an invented patient
+            # that reads as a real one. The mark cannot be added afterwards (ADR-0115), so
+            # there is nothing to repair in place.
+            report.patients_held += 1
+            report.held.append(
+                {"patient": patient.mrn,
+                 "why": f"its chart reads as {found_as}, not synthetic: it was loaded before "
+                        "patients could be marked. Load the cohort into an empty database",
+                 "charts": charts}
+            )
+            return None, False
         report.patients_already_present += 1
         return charts[0], True
     if len(charts) > 1:
@@ -532,6 +574,16 @@ def _chart_for(patient: Patient, system_for_mrn: str, run: Run, opts: Options, r
         report.patients_failed += 1
         report.failures.append(
             {"patient": patient.mrn, "step": "register", "why": _refusal(done.stderr)}
+        )
+        return None, False
+    if not says_synthetic(done.stdout):
+        # The chart exists and the node did not say it is synthetic. Stop writing to it:
+        # everything added would be on an invented patient that reads as real.
+        report.patients_failed += 1
+        report.failures.append(
+            {"patient": patient.mrn, "step": "register",
+             "why": f"chart {chart} was registered WITHOUT the synthetic mark; nothing more "
+                    "was written to it. This database now holds an unmarked invented chart"}
         )
         return None, False
     report.patients_registered += 1
@@ -610,7 +662,11 @@ class Options:
 
 
 def import_cohort(
-    cohort: Cohort, run: Run, opts: Options | None = None, have: Have = nothing_yet
+    cohort: Cohort,
+    run: Run,
+    opts: Options | None = None,
+    have: Have = nothing_yet,
+    kind: Kind = marked_synthetic,
 ) -> Report:
     """Write every patient, their sex and address, and their medicines, and account for
     the rest."""
@@ -632,7 +688,7 @@ def import_cohort(
     if uncodable:
         report.left_behind["drug codes that are not a drugref moiety"] = uncodable
     for patient in patients:
-        chart, existed = _chart_for(patient, system_for_mrn, run, opts, report)
+        chart, existed = _chart_for(patient, system_for_mrn, run, opts, report, kind)
         if chart is not None:
             _demographics(patient, chart, existed, run, have, report)
             _medicines(patient, chart, existed, run, report)
@@ -640,37 +696,29 @@ def import_cohort(
 
 
 # ---------------------------------------------------------------------------------------
-# The guard, the real runner, and the command line
+# The node's two reads, the real runner, and the command line
 # ---------------------------------------------------------------------------------------
 
-# Charts on the node that carry no cohort record number: anyone's but ours. Read from the
-# projections with psql because no `cairn-node` verb lists every chart. `patient_demographic`
-# and `patient_identifier` are the two projections a registration fills.
-FOREIGN_CHARTS_SQL = f"""
-SELECT count(*) FROM (
-    SELECT patient_id FROM patient_demographic
-    UNION
-    SELECT patient_id FROM patient_identifier
-) AS chart
-WHERE NOT EXISTS (
-    SELECT 1 FROM patient_identifier i
-     WHERE i.patient_id = chart.patient_id AND i.system LIKE '{MRN_SYSTEM_PREFIX}%'
-)
-"""
-
-
-def foreign_chart_count(conn: str) -> int:
-    """How many charts on the node were not written by this script. Raises if it cannot ask."""
-    out = subprocess.run(
-        ["psql", conn, "-X", "-At", "-v", "ON_ERROR_STOP=1", "-c", FOREIGN_CHARTS_SQL],
+def _psql(conn: str, sql: str) -> subprocess.CompletedProcess:
+    """Run one read with psql. The two reads below are the only SQL this script issues."""
+    return subprocess.run(
+        ["psql", conn, "-X", "-At", "-v", "ON_ERROR_STOP=1", "-c", sql],
         capture_output=True, text=True, check=False,
     )
-    if out.returncode != 0:
-        raise CohortRefused(
-            "could not ask the node which charts it holds, so cannot tell whether it is safe "
-            f"to write: {_refusal(out.stderr)}"
-        )
-    return int(out.stdout.strip())
+
+
+def chart_kind_reader(conn: str) -> Kind:
+    """Ask the node what a chart is, through the one function that knows (db/088)."""
+
+    def kind(chart: str) -> str:
+        if not _UUID_ONLY.match(chart):
+            raise ValueError(f"not a chart id: {chart!r}")
+        out = _psql(conn, f"SELECT cairn_chart_synthetic('{chart}')")
+        # Not knowing is NOT answered as synthetic: the caller then holds the patient,
+        # which is the safe side of this question.
+        return out.stdout.strip() if out.returncode == 0 else "unreadable"
+
+    return kind
 
 
 def chart_fields_reader(conn: str) -> Have:
@@ -786,23 +834,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if not args.conn:
             raise CohortRefused("no connection: pass --conn or set CAIRN_CONN")
-        foreign = foreign_chart_count(args.conn)
-        if foreign:
+        run = node_runner(args.cairn_node, args.key, args.conn)
+        if not knows_synthetic(run(["patient-register", "--help"]).stdout):
             raise CohortRefused(
-                f"the node holds {foreign} chart(s) that no cohort import created. Synthetic "
-                "patients are never written beside others: Cairn cannot yet mark them as "
-                "invented (#1207). Use a node kept for test data."
+                f"{args.cairn_node} cannot register a synthetic patient (its patient-register "
+                "has no --synthetic). Invented patients are never registered unmarked "
+                "(ADR-0115). Build cairn-node from a tree that has db/088."
             )
     except CohortRefused as e:
         print(f"REFUSED: {e}", file=sys.stderr)
         return 2
 
-    run = node_runner(args.cairn_node, args.key, args.conn)
     report = import_cohort(
         cohort,
         run,
         Options(args.register_past_candidates, args.limit),
         chart_fields_reader(args.conn),
+        chart_kind_reader(args.conn),
     )
     print("\n".join(report_lines(report, len(cohort.patients))))
     if args.report:

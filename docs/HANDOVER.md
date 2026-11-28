@@ -161,8 +161,16 @@
 > (`tests/registration_tolerates_an_unknown_field.rs`: both doors admit a registration with a field the build does not
 > know, register the chart and keep the field, so an older build shows a synthetic chart as real and marks it on
 > upgrade + reproject). The other five were run or checked in Task 0 (2026-11-28): all hold, each already pinned by a
-> test in the tree, named in the plan's table. **⇒ next on this thread: Tasks 1 and 2 together** (the mark, and the
-> line it draws; not safe apart). The #1207 plan is withdrawn (its file says so).
+> test in the tree, named in the plan's table. **Built (2026-11-28):** Tasks 1–2 (PR #1222, `db/088`, generation 88: the
+> mark, `cairn_chart_synthetic` with its THREE answers, no link across the line at the local door, the read cut at
+> read time) and the CLI half of Task 4 with Task 6 (`patient-register --synthetic`; the cohort importer registers
+> every patient with it, checks the node SAID so, and holds a chart an earlier run left unmarked; its
+> "node holds nobody else" guard is gone). Measured: the 300-patient cohort loads as 300 synthetic charts.
+> **⇒ next on this thread, in the plan's order:** Task 3 (the matcher and db/017 never propose a cross-line pair;
+> today only the hard veto stops them), then the window half of Task 4 with Task 5 (the band, the row marks, and the
+> **window-floor raise** owed since generation 88). `register-john-doe --synthetic` is not built. Nothing in the
+> window or the CLI's lists SHOWS the mark yet: an operator sees it only in the registration's own output and twin.
+> The #1207 plan is withdrawn (its file says so).
 
 > [!NOTE]
 > **Merged 2026-10-18 → 10-31** (PRs #802 → #895; ROADMAP has each, durable-rules their blocks; ADR-0081, ADR-0082).

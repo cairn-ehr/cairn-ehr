@@ -177,6 +177,8 @@ pub fn build_registration_body(
     event_id: Uuid,
     patient_id: Uuid,
     class: RegistrationClass,
+    // ADR-0115: the patient is invented (a training or test chart). Independent of `class`.
+    synthetic: bool,
     basis: Option<&str>,
     attestation: Option<&SearchAttestation>,
     kid: &str,
@@ -197,7 +199,7 @@ pub fn build_registration_body(
     });
     let assertion = RegistrationAssertion {
         class,
-        synthetic: false,
+        synthetic,
         basis,
         search,
     };
@@ -444,7 +446,7 @@ pub async fn register_patient(
     query: &SearchQuery,
     displayed: &CandidateList,
 ) -> anyhow::Result<Uuid> {
-    register_patient_returning_event(client, sk, kid, node_origin, name, query, displayed)
+    register_with_mark(client, sk, kid, node_origin, name, query, displayed, false)
         .await
         .map(|r| r.value)
 }
@@ -461,6 +463,44 @@ pub async fn register_patient_returning_event(
     name: Option<&str>,
     query: &SearchQuery,
     displayed: &CandidateList,
+) -> anyhow::Result<Committed<Uuid>> {
+    register_with_mark(client, sk, kid, node_origin, name, query, displayed, false).await
+}
+
+/// Register an INVENTED patient: a training or test chart, not a person (ADR-0115).
+///
+/// Exactly [`register_patient_returning_event`] in every other respect, the search that
+/// precedes it included: an invented patient is searched for and its candidates attested
+/// like any other, because a trainee learns the funnel by using it.
+///
+/// A function of its own, not a flag on the other, so that no call site can pass the wrong
+/// `bool`: a real patient registered as synthetic by a swapped argument could not be
+/// unmarked (ADR-0115, "Not guaranteed"), and the name at the call site is the cheapest
+/// thing that makes that slip visible in review.
+pub async fn register_synthetic_patient_returning_event(
+    client: &mut Client,
+    sk: &SigningKey,
+    kid: &str,
+    node_origin: &str,
+    name: Option<&str>,
+    query: &SearchQuery,
+    displayed: &CandidateList,
+) -> anyhow::Result<Committed<Uuid>> {
+    register_with_mark(client, sk, kid, node_origin, name, query, displayed, true).await
+}
+
+/// The one body both public registrations share. Private, so the bare `synthetic` flag is
+/// reachable only through the two names above.
+#[allow(clippy::too_many_arguments)] // the public pair's seven, plus the mark
+async fn register_with_mark(
+    client: &mut Client,
+    sk: &SigningKey,
+    kid: &str,
+    node_origin: &str,
+    name: Option<&str>,
+    query: &SearchQuery,
+    displayed: &CandidateList,
+    synthetic: bool,
 ) -> anyhow::Result<Committed<Uuid>> {
     // ONE transaction for every event this call authors — the #350 fix: a registration with
     // no matching demographic facts is exactly the half-registered state to avoid.
@@ -483,6 +523,7 @@ pub async fn register_patient_returning_event(
         name,
         query,
         displayed,
+        synthetic,
     )
     .await?;
 
@@ -508,10 +549,38 @@ pub fn registered_patient_lines(patient_id: Uuid, event_id: Uuid) -> String {
     format!("registered patient {patient_id}\nregistration event {event_id}")
 }
 
+/// The success lines for a SYNTHETIC registration (ADR-0115).
+///
+/// The first two lines are [`registered_patient_lines`], unchanged on purpose: the RUNBOOK's
+/// `sed -n 's/^registered patient //p'` and every script that reads a chart id from this
+/// output (the cohort importer among them) must go on working. The mark is a THIRD line,
+/// so the operator who just made an invented patient is told so before the prompt returns.
+pub fn registered_synthetic_patient_lines(patient_id: Uuid, event_id: Uuid) -> String {
+    format!(
+        "{}\nSYNTHETIC patient: not a real person. This cannot be changed.",
+        registered_patient_lines(patient_id, event_id)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use cairn_patient_search::{Candidate, PersonRow, TrustState};
+
+    /// ADR-0115: a synthetic registration says so, and still yields the chart id to the
+    /// same `sed` (and to the cohort importer's parser).
+    #[test]
+    fn a_synthetic_registration_says_so_and_keeps_the_runbook_line() {
+        let (pid, eid) = (Uuid::now_v7(), Uuid::now_v7());
+        let out = registered_synthetic_patient_lines(pid, eid);
+        let extracted: Vec<&str> = out
+            .lines()
+            .filter_map(|l| l.strip_prefix("registered patient "))
+            .collect();
+        assert_eq!(extracted, [pid.to_string()]);
+        assert!(out.lines().any(|l| l.starts_with("SYNTHETIC patient")));
+        assert!(!registered_patient_lines(pid, eid).contains("SYNTHETIC"));
+    }
 
     /// #828: the RUNBOOK's `sed -n 's/^registered patient //p'` must still yield exactly the
     /// chart id, and the event id must still be printed.
@@ -562,6 +631,7 @@ mod tests {
             Uuid::from_u128(2),
             pid,
             RegistrationClass::Standard,
+            false,
             None,
             Some(&attestation),
             "kid",
@@ -598,6 +668,7 @@ mod tests {
             Uuid::from_u128(2),
             Uuid::from_u128(1),
             RegistrationClass::Unidentified,
+            false,
             Some("unconscious, no ID"),
             None,
             "kid",
@@ -613,6 +684,7 @@ mod tests {
             Uuid::from_u128(2),
             Uuid::from_u128(1),
             RegistrationClass::Standard,
+            false,
             None,
             None,
             "kid",

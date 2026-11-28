@@ -59,9 +59,18 @@ async fn a_rolled_back_registration_leaves_no_chart_and_no_event() {
 
     let hlc_before = hlc_state(&c).await;
     let tx = c.transaction().await.unwrap();
-    let done = register_patient_in_tx(&tx, &sk, &kid, "n", Some("smith"), &query, &empty_list())
-        .await
-        .unwrap();
+    let done = register_patient_in_tx(
+        &tx,
+        &sk,
+        &kid,
+        "n",
+        Some("smith"),
+        &query,
+        &empty_list(),
+        false,
+    )
+    .await
+    .unwrap();
     drop(tx); // never committed: the drop rolls it back.
 
     assert!(events_of(&c, done.value).await.is_empty());
@@ -81,9 +90,18 @@ async fn register_in_tx_then_commit_equals_register_patient() {
     let query = SearchQuery::new("smith", Some("1980-01-01"), &[("mrn".into(), "A1".into())]);
 
     let tx = c.transaction().await.unwrap();
-    let a = register_patient_in_tx(&tx, &sk, &kid, "n", Some("smith"), &query, &empty_list())
-        .await
-        .unwrap();
+    let a = register_patient_in_tx(
+        &tx,
+        &sk,
+        &kid,
+        "n",
+        Some("smith"),
+        &query,
+        &empty_list(),
+        false,
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
     let b = register_patient_returning_event(
         &mut c,
@@ -116,15 +134,33 @@ async fn a_savepoint_rollback_leaves_the_outer_transaction_usable() {
 
     let mut outer = c.transaction().await.unwrap();
     let sp = outer.savepoint("reg").await.unwrap();
-    let done = register_patient_in_tx(&sp, &sk, &kid, "n", Some("smith"), &query, &empty_list())
-        .await
-        .unwrap();
+    let done = register_patient_in_tx(
+        &sp,
+        &sk,
+        &kid,
+        "n",
+        Some("smith"),
+        &query,
+        &empty_list(),
+        false,
+    )
+    .await
+    .unwrap();
     sp.rollback().await.unwrap();
     // The outer transaction still works, and can even register again.
     outer.query_one("SELECT 1", &[]).await.unwrap();
-    let kept = register_patient_in_tx(&outer, &sk, &kid, "n", Some("smith"), &query, &empty_list())
-        .await
-        .unwrap();
+    let kept = register_patient_in_tx(
+        &outer,
+        &sk,
+        &kid,
+        "n",
+        Some("smith"),
+        &query,
+        &empty_list(),
+        false,
+    )
+    .await
+    .unwrap();
     outer.commit().await.unwrap();
 
     assert!(events_of(&c, done.value).await.is_empty());
@@ -151,15 +187,33 @@ async fn a_refused_registration_on_a_savepoint_leaves_the_outer_transaction_usab
 
     let mut outer = c.transaction().await.unwrap();
     let sp = outer.savepoint("reg").await.unwrap();
-    let refused =
-        register_patient_in_tx(&sp, &sk, &kid, "n", Some(bad_name), &query, &empty_list()).await;
+    let refused = register_patient_in_tx(
+        &sp,
+        &sk,
+        &kid,
+        "n",
+        Some(bad_name),
+        &query,
+        &empty_list(),
+        false,
+    )
+    .await;
     assert!(refused.is_err(), "the floor must refuse the NUL name");
     // The savepoint is now aborted (25P02): it must be rolled back before any further use.
     sp.rollback().await.unwrap();
     outer.query_one("SELECT 1", &[]).await.unwrap();
-    let kept = register_patient_in_tx(&outer, &sk, &kid, "n", Some("smith"), &good, &empty_list())
-        .await
-        .unwrap();
+    let kept = register_patient_in_tx(
+        &outer,
+        &sk,
+        &kid,
+        "n",
+        Some("smith"),
+        &good,
+        &empty_list(),
+        false,
+    )
+    .await
+    .unwrap();
     outer.commit().await.unwrap();
 
     let total: i64 = c

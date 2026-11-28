@@ -278,7 +278,10 @@ async fn register_on_savepoint(
         .await
         .context("opening the registration savepoint")?;
     let kid = NodeKey::Full(sk).kid();
-    match register_patient_in_tx(tx, sk, &kid, node_origin, name, query, displayed).await {
+    // `false`: the window's registration door (`cairn_registration_submit`, db/083) has no way
+    // to carry ADR-0115's mark, so the service registers real patients only. A training
+    // patient from the window needs a new, additive door (plan Task 4, ADR-0111).
+    match register_patient_in_tx(tx, sk, &kid, node_origin, name, query, displayed, false).await {
         Ok(done) => {
             tx.batch_execute("RELEASE SAVEPOINT registration")
                 .await
