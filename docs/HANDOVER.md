@@ -247,17 +247,17 @@
 >    installer/intake robustness items).
 >    **⇒ NEXT: the genesis ceremony (#1182, a human act — no release channel exists until it does).**
 >    **The whole-project review is DONE (2026-11-28)** —
-   [`code_reviews/2026-11-28-whole-project-review.md`](code_reviews/2026-11-28-whole-project-review.md), PR #1242.
-   **Two Critical, both gating any pilot:** **#1226** (wrong-chart entry has no repair: reattribute unbuilt, a note
-   cannot be retracted) and **#1227** (any window login can forge a matcher link and a false "checked" — it inherits
-   `cairn_agent`'s match-table writes; medium fix). Important: **#1228** (same-generation older binary undoes an
-   in-place floor fix) · **#1229** (lock-then-read doors trust the caller's isolation; extends #1196) · **#1230**
-   (medication sign-off by a repudiated key reads signed) · **#1231**, **#1232** (allergy uncertainty: decisions) ·
-   **#1233** (twin never checked against body) · **#1234** (revoke vs a LAN-listening Postgres) · **#1235**,
-   **#1236** (a terminal cannot reach its own fix) · **#1237**, **#1238** (decisions) · **#1239** (a peer's
-   human-signed events are penned — multi-node pilots) · **#1240**; minors **#1241**; #905 widened (~27 files).
-   The small, decided ones (#1227, #1228, #1229, #1230, #1234, #1240) are the natural next build.
-   **Slice B must not ship to a site until #1182 is done** (C1 + C2 are merged). RUNBOOK §38, §39 (two machines), §40 and §41 (a node
+>    [`code_reviews/2026-11-28-whole-project-review.md`](code_reviews/2026-11-28-whole-project-review.md), PR #1242.
+>    **Two Critical, both gating any pilot:** **#1226** (wrong-chart entry has no repair: reattribute unbuilt, a note
+>    cannot be retracted) and **#1227** (any window login can forge a matcher link and a false "checked" — it inherits
+>    `cairn_agent`'s match-table writes; medium fix). Important: **#1228** (same-generation older binary undoes an
+>    in-place floor fix) · **#1229** (lock-then-read doors trust the caller's isolation; extends #1196) · **#1230**
+>    (medication sign-off by a repudiated key reads signed) · **#1231**, **#1232** (allergy uncertainty: decisions) ·
+>    **#1233** (twin never checked against body) · **#1234** (revoke vs a LAN-listening Postgres) · **#1235**,
+>    **#1236** (a terminal cannot reach its own fix) · **#1237**, **#1238** (decisions) · **#1239** (a peer's
+>    human-signed events are penned — multi-node pilots) · **#1240**; minors **#1241**; #905 widened (~27 files).
+>    The decided ones with a small or medium fix (#1227, #1228, #1229, #1230, #1234, #1240) are the natural next build.
+>    **Slice B must not ship to a site until #1182 is done** (C1 + C2 are merged). RUNBOOK §38, §39 (two machines), §40 and §41 (a node
 >    and a Pi) are owed by a human. **Otherwise:** sign-in
 >    **slice 4** (the emergency key, design §5.6, brainstorm first); **#1021**'s obligations projection and
 >    Pi figures (ROADMAP has the Mac figures; the Pi refused this Mac's SSH key on 2026-11-27). Design §10's findings 1–2 are decided
@@ -391,7 +391,7 @@ seam) · **the node/actor plane's two divergences** — db/007 fail-closes on an
 puller skips-and-advances a verifiable refusal where the clinical one pens it (**#268**); both `loop:needs-human`.
 
 **Standing gate:** whole-project review cycles repeat periodically; no release for clinical use before repeated cycles
-pass cleanly. Full passes: 2026-07-15 (#187–#217, fully closed) and **2026-11-28** (#1226–#1241, open; two
+pass cleanly. Full passes: 2026-07-02, 2026-07-15 (#187–#217, fully closed) and **2026-11-28** (#1226–#1241, open; two
 Critical). The milestone-scoped review 2026-11-15 filed #1128–#1139.
 
 > [!TIP]

@@ -1,9 +1,9 @@
 # Whole-project review (2026-11-28)
 
-This is the standing gate's second whole-project pass. The first was on 2026-07-15 and covered db/001–034. Since
-then the floor has grown to 87 migrations, the whole clinical surface has been built, and so has the #909
-terminal stack. On 2026-11-15 a review covered only the seams between GUI slices. This review covers `main` at
-`f2f48eef` (spec v0.115, `SCHEMA_GENERATION` 87).
+This is the standing gate's third whole-project pass. The earlier ones were on 2026-07-02 and 2026-07-15; the
+latter covered db/001–034. Since then the floor has grown to 87 migrations, the whole clinical surface has been
+built, and so has the #909 terminal stack. On 2026-11-15 a review covered only the seams between GUI slices. This
+review covers `main` at `f2f48eef` (spec v0.115, `SCHEMA_GENERATION` 87).
 
 The review made five parallel read-only passes, each tracing one question through every layer:
 
@@ -14,16 +14,16 @@ The review made five parallel read-only passes, each tracing one question throug
    node, a revoked terminal.
 3. **Sync convergence and DR:** does every stream added since July replicate, converge regardless of arrival
    order, ride the medium, and come back on restore? If it is node-local, does an ADR say so?
-4. **The documents against the code:** about 110 checkable claims in ADRs 0083–0113, the ADR index, the
+4. **The documents against the code:** about 110 checkable claims in ADRs 0083–0113, plus the ADR index, the
    durable rules' pins, and what CI never runs.
 5. **The governing principles across every clinical stream:** identity, append-only, uncertainty, the
    legibility twin, authorship, paper-parity.
 
 Every Critical and Important finding was re-checked against the code before filing, and each was checked
 against the issue list for duplicates. The matcher was not re-reviewed: it is advisory, it was reviewed in July,
-and it has had one commit since 11-15. Severity follows the 07-15 review:
+and it has had one commit since 11-15. Severity follows the 07-15 review's levels, with Process folded into Minor:
 
-- **Critical:** a wrong author, a wrong patient, or silent corruption is possible.
+- **Critical:** a wrong author, a wrong patient, silent corruption, or an unrepairable state is possible.
 - **Important:** a real defect, or a decision is owed.
 - **Minor:** a latent problem or an edge case.
 
@@ -31,23 +31,24 @@ and it has had one commit since 11-15. Severity follows the 07-15 review:
 
 The **floor holds where the 07-15 review found it weakest.**
 
-- **All 07-15 floor findings are fixed:** A1–A3 and D1–D3.
-- **The definers are sound:** all 103 SECURITY DEFINERs in db/035–087 pin `search_path` with `pg_temp` last and
-  revoke EXECUTE from PUBLIC, and their grants match their ADRs.
+- **All 07-15 floor findings are fixed:** A1–A7 and D1–D3 (I1 reopens part of D1 for equal generations).
+- **The definers are sound:** every SECURITY DEFINER in db/035–087 (105 of them) pins `search_path` with
+  `pg_temp` last and revokes EXECUTE from PUBLIC, and their grants match their ADRs.
 - **The trusted settings are pinned:** `cairn.remote_apply` and `cairn.reprojecting` are pinned wherever a
   definer writes `event_log`.
 - **Each node converges on its own:** within one node, every post-July projection is order-independent.
 - **The terminal stack:** no path was found that puts attacker code or keys on a terminal. The installer reads
   staging as hostile and installs the bytes it verified in memory. The verifier counts keys, not signatures,
   and handles forks. The gateway is mutual TLS 1.3 with pinned Ed25519 keys.
-- **The ADRs are accurate:** of about 110 checked claims, none was false.
+- **The ADRs are accurate:** of about 110 checked claims in the ADR texts, none was false; one count is
+  imprecise (#1241). The index, the durable rules and a CI comment did carry false statements, fixed below.
 
 The defects cluster in **four seams:**
 
 - **(A) A repair primitive the spec promises but nothing builds.** Wrong-chart entry has no reattribution, and
   a note cannot be retracted.
 - **(B) Privileges inherited, not granted.** The window inherits `cairn_agent`, and through it the matcher's
-  write tables. No guard sees write grants.
+  write tables. The window's door-surface guard lists only EXECUTE and SELECT, so it cannot see them.
 - **(C) Rules applied to one stream, silent for another.** A repudiated key is handled for notes and
   allergies, not medications. Principle 4's unknown and refused values are missing in allergies. A legibility
   twin is required, never checked.
@@ -60,7 +61,7 @@ The defects cluster in **four seams:**
 
 | # | Finding | Issue | Fix size |
 |---|---|---|---|
-| C1 | **Wrong-chart entry has no repair.** Reattribution, the spec's "primary high-frequency use case" (identity §5.5), is unbuilt. ROADMAP's deferral ("waits on a clinical-note surface") went stale at slice 3a and had no issue. A note has one event type and no retraction. A misfiled medication can only be "stopped". Allergies and given doses do have entered-in-error. Paper allows a strike-through; Cairn does not. **Gates any pilot.** | #1226 | large (interim: a note retraction, medium) |
+| C1 | **Wrong-chart entry has no repair.** Reattribution, which identity §5.5 rates "high-frequency, often ≥ weekly per clinician" for a misfiled note, is unbuilt. ROADMAP's deferral ("waits on a clinical-note surface") went stale at slice 3a and had no issue. A note has one event type and no retraction. A misfiled medication can only be "stopped". Allergies and given doses do have entered-in-error. Paper allows a strike-through; Cairn does not. **Gates any pilot.** | #1226 | large (interim: a note retraction, medium) |
 | C2 | **Any window login can forge a matcher identity link, and a false "checked".** `GRANT cairn_agent TO cairn_window` carries the matcher's INSERT/UPDATE on `match_proposal` and its DELETE on `match_pending`. `apply-auto-candidates` trusts the band and version it reads from the table, and enrols any version it has not seen. A terminal's raw-SQL session can therefore link two charts under a freshly minted matcher actor, or erase a chart's pending re-check. This is Critical where auto-apply is run. | #1227 | medium |
 
 ## Important
@@ -84,7 +85,7 @@ The defects cluster in **four seams:**
 ## Minor, process, and what was fixed here
 
 The minor and process findings are gathered in **#1241**. The most consequential is that the window
-door-surface guard sees only EXECUTE and SELECT, which is how C2 passed every guard. The others:
+door-surface guard sees only EXECUTE and SELECT, which is how C2 passed every guard. Among the others:
 
 - size caps on the window's draft and queue stores;
 - the gateway's pending queue can be flooded before proof of possession;
@@ -92,7 +93,7 @@ door-surface guard sees only EXECUTE and SELECT, which is how C2 passed every gu
 - launch refusals on a kiosk are invisible;
 - no two-node test covers any post-July stream, which would have caught I12 at once;
 - the release store's restore behaviour is undecided;
-- the 500-line rule is written down nowhere.
+- the 500-line rule is in no tracked document (CLAUDE.md, CONTRIBUTING, developers/), only in a few tests.
 
 **#905 is far wider than filed.** About 27 files, roughly 200 window tests, never run in CI. The issue has
 been widened and the workflow comment corrected. #963 was widened to cover medication draft lists.
@@ -100,15 +101,16 @@ been widened and the workflow comment corrected. #963 was widened to cover medic
 Fixed in this review's PR (#1242), all documentation:
 
 - `security.md` §7.5 said the window holds the node key. ADR-0109 retired that.
-- The ADR index lacked six partial supersessions and amendments:
+- The ADR index lacked seven partial supersessions and amendments:
   - 0083 ← 0108/0109
   - 0084 ← 0108
   - 0089 ← 0109
   - 0091 ← 0092 d12
   - 0094 ← 0107/0108
-  - 0097 ← 0101 d8
+  - 0097 ← 0101 d8–9
+  - 0099 d15 ← 0100 (a finished line stays in the list)
 - Two durable rules named pins that no longer exist, and told a developer to undo ADR-0109 (the window commit
-  runner) and batch charting slice 1 (the line's Cancel).
+  runner) and batch charting slice 1 (the line's Cancel). The failed-commit wording rule stays live.
 
 ## Deliberately not findings
 
