@@ -179,8 +179,7 @@ BEGIN
     END IF;
     RAISE EXCEPTION
         'no match proposal between a synthetic patient''s chart and a real patient''s: % and % stand on opposite sides and can never be linked (ADR-0115). A row already here may only be closed: retracted, rejected or review',
-        NEW.patient_low, NEW.patient_high
-        USING ERRCODE = 'check_violation';
+        NEW.patient_low, NEW.patient_high;
 END;
 $$;
 
